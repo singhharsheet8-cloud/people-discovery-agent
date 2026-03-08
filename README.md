@@ -4,7 +4,7 @@ An AI-powered agent that discovers comprehensive information about any person by
 
 Built with **LangGraph** for stateful agent orchestration (with human-in-the-loop), **FastAPI** for the async backend, and **Next.js 14** for a real-time streaming frontend.
 
-**Live demo:** Frontend on [Vercel](https://frontend-dj01isx7u-harsheets-projects-33a318bf.vercel.app) | Backend on [Railway](https://railway.app)
+**Live demo:** [Frontend (Vercel)](https://frontend-chi-gules-87.vercel.app) | [Backend API (Railway)](https://backend-production-50b0.up.railway.app/api/health)
 
 ---
 
