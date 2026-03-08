@@ -56,7 +56,7 @@ async def analyze_results(state: AgentState) -> dict:
         results_summary.append(
             f"[{i}] ({r.get('source_type', 'web')}) {r.get('title', 'No title')}\n"
             f"    URL: {r.get('url', '')}\n"
-            f"    Content: {r.get('content', '')[:300]}"
+            f"    Content: {r.get('content', '')[:600]}"
         )
 
     known_facts_str = json.dumps(state.get("known_facts", {}), indent=2) if state.get("known_facts") else "None"

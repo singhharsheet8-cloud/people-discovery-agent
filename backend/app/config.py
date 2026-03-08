@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     confidence_threshold: float = 0.75
     max_clarifications: int = 2
-    max_search_queries: int = 4
+    max_search_queries: int = 6
 
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
     cache_ttl_seconds: int = 3600
@@ -90,6 +90,6 @@ def get_synthesis_llm():
         model=model,
         api_key=settings.openai_api_key,
         temperature=0,
-        max_tokens=2048,
+        max_tokens=4096,
         model_kwargs={"response_format": {"type": "json_object"}},
     )

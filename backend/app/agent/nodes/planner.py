@@ -13,20 +13,25 @@ async def _invoke_planner(llm, messages):
     return await llm.ainvoke(messages)
 
 PLANNER_SYSTEM_PROMPT = """You are a search query planner for a people discovery system.
-Given information about a person, generate exactly 3-4 targeted search queries.
+Given information about a person, generate 5-6 targeted search queries to find comprehensive information.
 
 AVAILABLE SEARCH TYPES:
-- "web": General web search (broad coverage)
-- "linkedin": LinkedIn profiles (professional info)
-- "github": GitHub profiles (for technical people)
-- "youtube": YouTube (talks, interviews)
-- "news": News articles and press coverage
+- "web": General web search (broad coverage, company bios, conference profiles)
+- "linkedin": LinkedIn profiles (professional info, work history, endorsements)
+- "github": GitHub profiles (for technical people — repos, contributions)
+- "youtube": YouTube (talks, interviews, conference presentations)
+- "news": News articles, press coverage, industry mentions
+- "twitter": Twitter/X profiles (opinions, announcements)
+- "academic": Academic papers, research (for researchers/professors)
+- "crunchbase": Startup/company info (for founders/executives)
 
 RULES:
-1. Generate EXACTLY 3-4 queries (no more)
+1. Generate 5-6 queries for maximum coverage
 2. ALWAYS include "linkedin" and "web"
-3. Pick 1-2 more based on likely profile
-4. Keep queries concise — just the person's name + key identifier
+3. ALWAYS include "news" for professionals
+4. Add "github" for tech people, "youtube" for speakers/executives, "crunchbase" for founders
+5. Vary the query text across searches — include name + company, name + role, name + domain
+6. For clarification rounds, use the NEW information to craft precise queries
 
 Respond with valid JSON only:
 {

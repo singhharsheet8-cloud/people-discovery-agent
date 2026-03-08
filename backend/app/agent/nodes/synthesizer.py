@@ -59,7 +59,7 @@ async def synthesize_profile(state: AgentState) -> dict:
         sources_text.append(
             f"[Source {i}] ({r.get('source_type', 'web')}) {r.get('title', '')}\n"
             f"URL: {r.get('url', '')}\n"
-            f"Content: {r.get('content', '')[:400]}"
+            f"Content: {r.get('content', '')[:800]}"
         )
 
     analysis_text = ""
