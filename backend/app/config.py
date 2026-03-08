@@ -11,12 +11,12 @@ class Settings(BaseSettings):
     youtube_api_key: str = ""
     github_token: str = ""
 
-    # Planning/tool-calling LLM (runs 3-5x per query — keep cheap)
+    # Planning/analysis LLM — non-reasoning model, fast JSON output
     planning_model: str = "gpt-4.1-mini"
     planning_base_url: str = ""  # Override for Groq/Together AI
 
-    # Synthesis LLM (runs once — use best quality)
-    synthesis_model: str = "gpt-4.1-mini"
+    # Synthesis LLM — reasoning model for richer profiles
+    synthesis_model: str = "gpt-5-mini"
 
     # Alternative provider API keys (OpenAI-compatible endpoints)
     groq_api_key: str = ""       # Optional: Groq for ultra-fast inference
@@ -86,6 +86,11 @@ def get_fallback_planning_llm(temperature: float = 0):
     )
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """GPT-5 series and o-series are reasoning models that use max_completion_tokens."""
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def get_synthesis_llm():
     """Build synthesis LLM — Anthropic for Claude, OpenAI for GPT models."""
     from langchain_anthropic import ChatAnthropic
@@ -102,10 +107,16 @@ def get_synthesis_llm():
             max_tokens=4096,
         )
 
-    return ChatOpenAI(
-        model=model,
-        api_key=settings.openai_api_key,
-        temperature=0,
-        max_tokens=4096,
-        model_kwargs={"response_format": {"type": "json_object"}},
-    )
+    kwargs: dict = {
+        "model": model,
+        "api_key": settings.openai_api_key,
+        "model_kwargs": {"response_format": {"type": "json_object"}},
+    }
+
+    if _is_reasoning_model(model):
+        kwargs["max_completion_tokens"] = 4096
+    else:
+        kwargs["temperature"] = 0
+        kwargs["max_tokens"] = 4096
+
+    return ChatOpenAI(**kwargs)
