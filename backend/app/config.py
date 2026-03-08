@@ -70,7 +70,7 @@ def get_planning_llm(temperature: float = 0):
 
 
 def get_synthesis_llm():
-    """Build synthesis LLM — Anthropic for Claude models, OpenAI-compat for everything else."""
+    """Build synthesis LLM — Anthropic for Claude, OpenAI for GPT models."""
     from langchain_anthropic import ChatAnthropic
     from langchain_openai import ChatOpenAI
 
@@ -85,9 +85,9 @@ def get_synthesis_llm():
             max_tokens=4096,
         )
 
-    base_url = settings.planning_base_url or None
-    api_key = _resolve_api_key(settings, base_url)
-    kwargs: dict = {"model": model, "api_key": api_key, "temperature": 0, "max_tokens": 2048}
-    if base_url:
-        kwargs["base_url"] = base_url
-    return ChatOpenAI(**kwargs)
+    return ChatOpenAI(
+        model=model,
+        api_key=settings.openai_api_key,
+        temperature=0,
+        max_tokens=2048,
+    )
