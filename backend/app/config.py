@@ -12,15 +12,15 @@ class Settings(BaseSettings):
     github_token: str = ""
 
     # Planning/tool-calling LLM (runs 3-5x per query — keep cheap)
-    planning_model: str = "gpt-5-mini"
+    planning_model: str = "gpt-4.1-mini"
     planning_base_url: str = ""  # Override for Groq/Together AI
 
     # Synthesis LLM (runs once — use best quality)
-    synthesis_model: str = "claude-sonnet-4-5-20241022"
+    synthesis_model: str = "gpt-4.1-mini"
 
     # Alternative provider API keys (OpenAI-compatible endpoints)
-    groq_api_key: str = ""       # Use Llama/Qwen on Groq (ultra-fast)
-    together_api_key: str = ""   # Use DeepSeek/Qwen on Together AI
+    groq_api_key: str = ""       # Optional: Groq for ultra-fast inference
+    together_api_key: str = ""   # Optional: Together AI for open-source models
 
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
