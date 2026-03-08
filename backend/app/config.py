@@ -63,6 +63,7 @@ def get_planning_llm(temperature: float = 0):
         "api_key": api_key,
         "temperature": temperature,
         "max_tokens": 1024,
+        "model_kwargs": {"response_format": {"type": "json_object"}},
     }
     if base_url:
         kwargs["base_url"] = base_url
@@ -90,4 +91,5 @@ def get_synthesis_llm():
         api_key=settings.openai_api_key,
         temperature=0,
         max_tokens=2048,
+        model_kwargs={"response_format": {"type": "json_object"}},
     )

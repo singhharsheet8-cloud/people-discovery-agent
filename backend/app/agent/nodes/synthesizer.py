@@ -72,14 +72,16 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
     ])
 
     try:
-        content = response.content
+        content = response.content.strip()
         if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
+            content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        profile = json.loads(content.strip())
-    except (json.JSONDecodeError, IndexError):
-        logger.error("Failed to parse synthesis response, building fallback profile")
+            content = content.split("```")[1].split("```")[0].strip()
+
+        profile = json.loads(content)
+    except (json.JSONDecodeError, IndexError) as e:
+        logger.error(f"Failed to parse synthesis response: {e}")
+        logger.error(f"Raw response (first 500 chars): {response.content[:500]}")
         profile = _build_fallback_profile(state, analysis)
 
     profile["confidence_score"] = state.get("confidence_score", 0)
