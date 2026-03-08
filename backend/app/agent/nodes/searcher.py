@@ -19,12 +19,10 @@ async def execute_searches(state: AgentState) -> dict:
         query_str = q["query"] if isinstance(q, dict) else str(q)
         search_type = q.get("search_type", "web") if isinstance(q, dict) else "web"
 
-        if search_type == "youtube":
-            tasks.append(_with_timeout(_run_youtube_search(query_str)))
-        elif search_type == "github":
-            tasks.append(_with_timeout(_run_github_api_search(query_str)))
-
         tasks.append(_with_timeout(_run_tavily_search(query_str, search_type)))
+
+        if search_type == "github":
+            tasks.append(_with_timeout(_run_github_api_search(query_str)))
 
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 

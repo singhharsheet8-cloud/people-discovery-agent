@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
-    confidence_threshold: float = 0.50
+    confidence_threshold: float = 0.35
     max_clarifications: int = 2
     max_search_queries: int = 4
 
@@ -58,7 +58,12 @@ def get_planning_llm(temperature: float = 0):
     base_url = settings.planning_base_url or None
     api_key = _resolve_api_key(settings, base_url)
 
-    kwargs: dict = {"model": settings.planning_model, "api_key": api_key, "temperature": temperature}
+    kwargs: dict = {
+        "model": settings.planning_model,
+        "api_key": api_key,
+        "temperature": temperature,
+        "max_tokens": 1024,
+    }
     if base_url:
         kwargs["base_url"] = base_url
     return ChatOpenAI(**kwargs)
@@ -82,7 +87,7 @@ def get_synthesis_llm():
 
     base_url = settings.planning_base_url or None
     api_key = _resolve_api_key(settings, base_url)
-    kwargs: dict = {"model": model, "api_key": api_key, "temperature": 0}
+    kwargs: dict = {"model": model, "api_key": api_key, "temperature": 0, "max_tokens": 2048}
     if base_url:
         kwargs["base_url"] = base_url
     return ChatOpenAI(**kwargs)
