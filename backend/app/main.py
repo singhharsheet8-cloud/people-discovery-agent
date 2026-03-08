@@ -43,7 +43,20 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    import asyncio
+    from app.cache import cleanup_expired_cache
+
+    async def _periodic_cache_cleanup():
+        while True:
+            await asyncio.sleep(600)
+            try:
+                await cleanup_expired_cache()
+            except Exception:
+                pass
+
+    cleanup_task = asyncio.create_task(_periodic_cache_cleanup())
     yield
+    cleanup_task.cancel()
     await close_db()
 
 

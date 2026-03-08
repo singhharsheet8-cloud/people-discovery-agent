@@ -2,6 +2,7 @@ import logging
 import httpx
 from app.config import get_settings
 from app.models.search import SearchResult
+from app.cache import get_cached_results, set_cached_results
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,10 @@ async def search_youtube(query: str, max_results: int = 5) -> list[SearchResult]
     if not settings.youtube_api_key:
         logger.debug("No YouTube API key configured, skipping YouTube API search")
         return []
+
+    cached = await get_cached_results(query, "youtube_api")
+    if cached is not None:
+        return [SearchResult(**r) for r in cached]
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -44,6 +49,10 @@ async def search_youtube(query: str, max_results: int = 5) -> list[SearchResult]
                     score=0.6,
                 )
             )
+
+        await set_cached_results(
+            query, "youtube_api", [r.model_dump() for r in results]
+        )
         return results
 
     except Exception as e:

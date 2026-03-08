@@ -51,7 +51,11 @@ def _resolve_api_key(settings: Settings, base_url: str | None) -> str:
 
 
 def get_planning_llm(temperature: float = 0):
-    """Build planning LLM — supports OpenAI, Groq, Together AI."""
+    """Build planning LLM with automatic fallback.
+
+    Primary: configured provider (Groq/Together AI/OpenAI).
+    Fallback: OpenAI gpt-4.1-mini if primary uses a non-OpenAI base_url.
+    """
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
@@ -67,7 +71,20 @@ def get_planning_llm(temperature: float = 0):
     }
     if base_url:
         kwargs["base_url"] = base_url
-    return ChatOpenAI(**kwargs)
+
+    primary = ChatOpenAI(**kwargs)
+
+    if base_url and settings.openai_api_key:
+        fallback = ChatOpenAI(
+            model="gpt-4.1-mini",
+            api_key=settings.openai_api_key,
+            temperature=temperature,
+            max_tokens=1024,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+        return primary.with_fallbacks([fallback])
+
+    return primary
 
 
 def get_synthesis_llm():
