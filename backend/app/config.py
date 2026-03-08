@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
-    confidence_threshold: float = 0.35
+    confidence_threshold: float = 0.75
     max_clarifications: int = 2
     max_search_queries: int = 4
 

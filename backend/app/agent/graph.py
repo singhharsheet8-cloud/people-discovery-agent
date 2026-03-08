@@ -21,23 +21,26 @@ def _route_after_confidence(state: AgentState) -> str:
     clarification_count = state.get("clarification_count", 0)
     results_count = len(state.get("search_results", []))
 
-    if clarification_count > 0:
-        logger.info(f"Post-clarification round, proceeding to synthesis")
-        return "synthesize"
-
-    if confidence >= settings.confidence_threshold or results_count >= 3:
-        logger.info(f"Confidence {confidence:.3f} with {results_count} results, proceeding to synthesis")
-        return "synthesize"
-
     if clarification_count >= settings.max_clarifications:
-        logger.info(f"Max clarifications reached, forcing synthesis")
+        logger.info(f"Max clarifications ({settings.max_clarifications}) reached, synthesizing with best data")
+        return "synthesize"
+
+    if confidence >= settings.confidence_threshold:
+        logger.info(f"Confidence {confidence:.3f} >= {settings.confidence_threshold}, synthesizing directly")
         return "synthesize"
 
     if results_count == 0:
         logger.info(f"No results found, asking for clarification")
         return "clarify"
 
-    logger.info(f"Proceeding to synthesis with available data")
+    if clarification_count < settings.max_clarifications:
+        logger.info(
+            f"Confidence {confidence:.3f} < {settings.confidence_threshold} — "
+            f"asking clarification (round {clarification_count + 1}/{settings.max_clarifications})"
+        )
+        return "clarify"
+
+    logger.info(f"Synthesizing with confidence {confidence:.3f}")
     return "synthesize"
 
 
