@@ -2,8 +2,9 @@ import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.types import interrupt
-from app.config import get_settings, get_planning_llm
+from app.config import get_settings
 from app.agent.state import AgentState
+from app.utils import invoke_llm_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,6 @@ Respond with valid JSON only:
 
 async def ask_clarification(state: AgentState) -> dict:
     settings = get_settings()
-    llm = get_planning_llm(temperature=0.3)
-
     analysis = state.get("analyzed_results", {})
     people = analysis.get("identified_people", [])
     ambiguities = analysis.get("ambiguities", [])
@@ -47,10 +46,10 @@ Clarification round: {state.get("clarification_count", 0) + 1}
 
 Generate a focused clarification question to identify the right person."""
 
-    response = await llm.ainvoke([
+    response = await invoke_llm_with_fallback([
         SystemMessage(content=CLARIFIER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
-    ])
+    ], label="clarifier", max_tokens=512)
 
     try:
         clarification = json.loads(response.content)
