@@ -23,9 +23,9 @@ echo ""
 # ---- Check prerequisites ----
 info "Checking prerequisites..."
 
-command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.11+"
-command -v node    >/dev/null 2>&1 || fail "node not found. Install Node.js 18+"
-command -v npm     >/dev/null 2>&1 || fail "npm not found. Install Node.js 18+"
+command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.10+ from https://python.org"
+command -v node    >/dev/null 2>&1 || fail "node not found. Install Node.js 18+ from https://nodejs.org"
+command -v npm     >/dev/null 2>&1 || fail "npm not found. Install Node.js 18+ from https://nodejs.org"
 
 PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
@@ -49,18 +49,28 @@ source venv/bin/activate
 
 pip install --quiet --upgrade pip 2>/dev/null || true
 pip install --quiet -r requirements.txt
+pip install --quiet websockets 2>/dev/null || true
 ok "Backend dependencies installed"
 
 # ---- .env file ----
 if [ ! -f ".env" ]; then
     cp .env.example .env
-    warn "Created backend/.env from template — you need to add your API keys!"
+    warn "Created backend/.env from template"
     echo ""
-    echo "  Required keys (edit backend/.env):"
-    echo "    OPENAI_API_KEY   — or GROQ_API_KEY with PLANNING_BASE_URL"
-    echo "    TAVILY_API_KEY   — get free key at https://tavily.com"
+    echo -e "  ${YELLOW}ACTION REQUIRED: Add your API keys to backend/.env${NC}"
     echo ""
-    echo "  Then re-run this script."
+    echo "  Required keys:"
+    echo "    OPENAI_API_KEY    — get from https://platform.openai.com/api-keys"
+    echo "    TAVILY_API_KEY    — get free key at https://tavily.com"
+    echo ""
+    echo "  Optional (recommended):"
+    echo "    GITHUB_TOKEN      — GitHub PAT for higher rate limits"
+    echo "    YOUTUBE_API_KEY   — for dedicated video search"
+    echo ""
+    echo "  Edit the file, then re-run this script:"
+    echo "    nano backend/.env   # or use your editor"
+    echo "    ./setup.sh"
+    echo ""
     exit 1
 else
     ok "backend/.env exists"
@@ -69,14 +79,10 @@ fi
 # Validate required keys
 source .env 2>/dev/null || true
 
-HAS_LLM=false
-[ -n "${OPENAI_API_KEY:-}" ] && [ "${OPENAI_API_KEY}" != "sk-..." ] && HAS_LLM=true
-[ -n "${GROQ_API_KEY:-}" ]   && [ "${GROQ_API_KEY}" != "gsk_..." ] && HAS_LLM=true
-
-if [ "$HAS_LLM" = false ]; then
-    fail "No LLM API key set. Add OPENAI_API_KEY or GROQ_API_KEY to backend/.env"
+if [ -z "${OPENAI_API_KEY:-}" ] || [ "${OPENAI_API_KEY}" = "sk-..." ]; then
+    fail "OPENAI_API_KEY not set. Add it to backend/.env"
 fi
-ok "LLM API key configured"
+ok "OpenAI API key configured"
 
 if [ -z "${TAVILY_API_KEY:-}" ] || [ "${TAVILY_API_KEY}" = "tvly-..." ]; then
     fail "TAVILY_API_KEY not set. Get a free key at https://tavily.com and add to backend/.env"
@@ -96,7 +102,7 @@ ok "Frontend dependencies installed"
 
 if [ ! -f ".env.local" ]; then
     cp .env.example .env.local
-    ok "Created frontend/.env.local"
+    ok "Created frontend/.env.local (points to localhost:8000)"
 else
     ok "frontend/.env.local exists"
 fi
@@ -107,7 +113,7 @@ echo "======================================"
 echo -e "  ${GREEN}Setup complete!${NC}"
 echo "======================================"
 echo ""
-echo "  Start the app:"
+echo "  Start the app in two terminals:"
 echo ""
 echo "    Terminal 1 (backend):"
 echo "      cd backend && source venv/bin/activate"
@@ -118,6 +124,9 @@ echo "      cd frontend && npm run dev"
 echo ""
 echo "    Then open http://localhost:3000"
 echo ""
-echo "  Or run the test suite:"
+echo "  Run the automated test suite:"
 echo "      ./test.sh"
+echo ""
+echo "  Or use Docker Compose:"
+echo "      docker compose up --build"
 echo ""
