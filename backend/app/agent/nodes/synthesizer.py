@@ -55,21 +55,16 @@ async def synthesize_profile(state: AgentState) -> dict:
 
     analysis_text = ""
     if best_idx >= 0 and people:
-        analysis_text = f"Best match analysis:\n{json.dumps(people[best_idx], indent=2)}"
+        analysis_text = f"Pre-analysis:\n{json.dumps(people[best_idx], indent=2)}"
 
-    user_prompt = f"""Create a comprehensive profile for this person.
-
-Original query: {state["person_query"]}
-Known facts: {json.dumps(state.get("known_facts", {}), indent=2)}
+    user_prompt = f"""Create a comprehensive profile for: {state["person_query"]}
 
 {analysis_text}
 
-All sources ({len(sources_text)}):
-{chr(10).join(sources_text)}
+Sources ({len(sources_text)} total):
+{chr(10).join(sources_text[:15])}
 
-Confidence score from analysis: {state.get("confidence_score", 0)}
-
-Synthesize the most accurate and complete profile possible."""
+Synthesize the most accurate and complete profile from these sources. Fill in every field you can."""
 
     response = await llm.ainvoke([
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),

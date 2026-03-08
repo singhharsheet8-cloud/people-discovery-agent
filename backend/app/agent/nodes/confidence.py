@@ -18,7 +18,12 @@ def check_confidence(state: AgentState) -> dict:
     results = state.get("search_results", [])
 
     if not people:
-        logger.info("No identified people, confidence = 0")
+        results_count = len(results)
+        if results_count > 0:
+            base_confidence = min(0.5, results_count * 0.1)
+            logger.info(f"No structured analysis but {results_count} results found, confidence = {base_confidence}")
+            return {"confidence_score": base_confidence, "status": "confidence_checked"}
+        logger.info("No identified people and no results, confidence = 0")
         return {"confidence_score": 0.0, "status": "confidence_checked"}
 
     best_idx = analysis.get("best_match_index", 0)
