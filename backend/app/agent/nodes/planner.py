@@ -1,16 +1,11 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_settings, get_planning_llm
+from app.config import get_settings
 from app.agent.state import AgentState
-from app.utils import async_retry
+from app.utils import invoke_llm_with_fallback
 
 logger = logging.getLogger(__name__)
-
-
-@async_retry(max_retries=2)
-async def _invoke_planner(llm, messages):
-    return await llm.ainvoke(messages)
 
 PLANNER_SYSTEM_PROMPT = """You are a search query planner for a people discovery system.
 Given information about a person, generate 5-6 targeted search queries to find comprehensive information.
@@ -43,8 +38,6 @@ Respond with valid JSON only:
 
 async def plan_searches(state: AgentState) -> dict:
     settings = get_settings()
-    llm = get_planning_llm()
-
     known_facts_str = json.dumps(state.get("known_facts", {}), indent=2) if state.get("known_facts") else "None yet"
     existing_platforms = set()
     for r in state.get("search_results", []):
@@ -61,10 +54,10 @@ Clarification round: {state.get("clarification_count", 0)}
 
 Generate targeted search queries. {"Focus on narrower queries using the new clarification information. Avoid re-searching platforms that already returned good results." if state.get("clarification_count", 0) > 0 else "Cast a wide net across multiple platforms."}"""
 
-    response = await _invoke_planner(llm, [
+    response = await invoke_llm_with_fallback([
         SystemMessage(content=PLANNER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
-    ])
+    ], label="planner")
 
     try:
         plan = json.loads(response.content)

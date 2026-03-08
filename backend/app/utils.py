@@ -8,8 +8,7 @@ logger = logging.getLogger(__name__)
 def async_retry(max_retries: int = 2, base_delay: float = 1.0, max_delay: float = 8.0):
     """Retry async functions with exponential backoff.
 
-    Retries on transient errors (timeouts, rate limits, network).
-    Does NOT retry on auth errors or invalid requests.
+    Does NOT retry on auth, invalid requests, or rate limit errors.
     """
 
     def decorator(fn):
@@ -41,3 +40,25 @@ def async_retry(max_retries: int = 2, base_delay: float = 1.0, max_delay: float 
         return wrapper
 
     return decorator
+
+
+async def invoke_llm_with_fallback(messages, label: str = "llm"):
+    """Invoke planning LLM with automatic fallback to OpenAI on rate limit errors."""
+    from app.config import get_planning_llm, get_fallback_planning_llm
+
+    primary = get_planning_llm()
+    try:
+        return await primary.ainvoke(messages)
+    except Exception as primary_err:
+        err_str = str(primary_err).lower()
+        is_rate_limit = any(t in err_str for t in ("rate limit", "rate_limit", "429"))
+
+        if not is_rate_limit:
+            raise
+
+        fallback = get_fallback_planning_llm()
+        if fallback is None:
+            raise
+
+        logger.warning(f"{label}: primary LLM rate-limited, falling back to OpenAI")
+        return await fallback.ainvoke(messages)

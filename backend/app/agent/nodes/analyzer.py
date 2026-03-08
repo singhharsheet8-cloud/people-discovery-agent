@@ -1,16 +1,11 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_settings, get_planning_llm
+from app.config import get_settings
 from app.agent.state import AgentState
-from app.utils import async_retry
+from app.utils import invoke_llm_with_fallback
 
 logger = logging.getLogger(__name__)
-
-
-@async_retry(max_retries=2)
-async def _invoke_analyzer(llm, messages):
-    return await llm.ainvoke(messages)
 
 ANALYZER_SYSTEM_PROMPT = """You are an expert research analyst specializing in person identification and disambiguation.
 
@@ -49,7 +44,6 @@ Respond with valid JSON only:
 
 async def analyze_results(state: AgentState) -> dict:
     settings = get_settings()
-    llm = get_planning_llm()
 
     results_summary = []
     for i, r in enumerate(state.get("search_results", [])):
@@ -71,10 +65,10 @@ Search results ({len(results_summary)} total):
 
 Analyze these results and identify the person(s) they refer to."""
 
-    response = await _invoke_analyzer(llm, [
+    response = await invoke_llm_with_fallback([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
-    ])
+    ], label="analyzer")
 
     try:
         analysis = json.loads(response.content)
