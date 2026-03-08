@@ -42,11 +42,11 @@ def async_retry(max_retries: int = 2, base_delay: float = 1.0, max_delay: float 
     return decorator
 
 
-async def invoke_llm_with_fallback(messages, label: str = "llm"):
+async def invoke_llm_with_fallback(messages, label: str = "llm", max_tokens: int = 2048):
     """Invoke planning LLM with automatic fallback to OpenAI on rate limit errors."""
     from app.config import get_planning_llm, get_fallback_planning_llm
 
-    primary = get_planning_llm()
+    primary = get_planning_llm(max_tokens=max_tokens)
     try:
         return await primary.ainvoke(messages)
     except Exception as primary_err:
@@ -56,7 +56,7 @@ async def invoke_llm_with_fallback(messages, label: str = "llm"):
         if not is_rate_limit:
             raise
 
-        fallback = get_fallback_planning_llm()
+        fallback = get_fallback_planning_llm(max_tokens=max_tokens)
         if fallback is None:
             raise
 

@@ -68,7 +68,7 @@ Analyze these results and identify the person(s) they refer to."""
     response = await invoke_llm_with_fallback([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
-    ], label="analyzer")
+    ], label="analyzer", max_tokens=2048)
 
     try:
         analysis = json.loads(response.content)

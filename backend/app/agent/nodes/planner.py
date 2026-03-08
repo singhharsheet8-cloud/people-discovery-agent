@@ -57,7 +57,7 @@ Generate targeted search queries. {"Focus on narrower queries using the new clar
     response = await invoke_llm_with_fallback([
         SystemMessage(content=PLANNER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
-    ], label="planner")
+    ], label="planner", max_tokens=1024)
 
     try:
         plan = json.loads(response.content)

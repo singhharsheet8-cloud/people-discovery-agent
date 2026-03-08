@@ -50,8 +50,11 @@ def _resolve_api_key(settings: Settings, base_url: str | None) -> str:
     return settings.openai_api_key
 
 
-def get_planning_llm(temperature: float = 0):
-    """Build primary planning LLM — supports OpenAI, Groq, Together AI."""
+def get_planning_llm(temperature: float = 0, max_tokens: int = 2048):
+    """Build primary planning LLM — supports OpenAI, Groq, Together AI.
+
+    Planner calls use ~200 output tokens; analyzer calls need up to 2048.
+    """
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
@@ -62,7 +65,7 @@ def get_planning_llm(temperature: float = 0):
         "model": settings.planning_model,
         "api_key": api_key,
         "temperature": temperature,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "model_kwargs": {"response_format": {"type": "json_object"}},
     }
     if base_url:
@@ -70,7 +73,7 @@ def get_planning_llm(temperature: float = 0):
     return ChatOpenAI(**kwargs)
 
 
-def get_fallback_planning_llm(temperature: float = 0):
+def get_fallback_planning_llm(temperature: float = 0, max_tokens: int = 2048):
     """Fallback planning LLM using OpenAI directly (used when primary hits rate limits)."""
     from langchain_openai import ChatOpenAI
 
@@ -81,7 +84,7 @@ def get_fallback_planning_llm(temperature: float = 0):
         model="gpt-4.1-mini",
         api_key=settings.openai_api_key,
         temperature=temperature,
-        max_tokens=1024,
+        max_tokens=max_tokens,
         model_kwargs={"response_format": {"type": "json_object"}},
     )
 
