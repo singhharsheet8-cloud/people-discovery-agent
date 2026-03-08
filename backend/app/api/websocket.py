@@ -31,13 +31,26 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                continue
+
             msg_type = data.get("type", "")
 
             if msg_type == "query":
-                await _run_discovery(websocket, session_id, query=data.get("text", ""))
+                text = (data.get("text") or "").strip()
+                if not text:
+                    await websocket.send_json({"type": "error", "message": "Query cannot be empty"})
+                    continue
+                await _run_discovery(websocket, session_id, query=text)
             elif msg_type == "clarification_response":
-                await _run_discovery(websocket, session_id, clarification=data.get("text", ""))
+                text = (data.get("text") or "").strip()
+                if not text:
+                    await websocket.send_json({"type": "error", "message": "Response cannot be empty"})
+                    continue
+                await _run_discovery(websocket, session_id, clarification=text)
             else:
                 await websocket.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
 
@@ -136,6 +149,8 @@ async def _run_discovery(
         input_data = Command(resume=clarification)
         await websocket.send_json({"type": "status", "step": "resuming", "message": "Processing your response..."})
 
+    result_sent = False
+
     try:
         async for event in graph.astream(input_data, config, stream_mode="updates"):
             for node_name, node_output in event.items():
@@ -166,10 +181,16 @@ async def _run_discovery(
                         "profile": profile,
                         "confidence": confidence,
                     })
+                    result_sent = True
 
         state = graph.get_state(config)
         if state.next:
-            interrupt_value = state.tasks[0].interrupts[0].value
+            tasks = state.tasks or []
+            if tasks and tasks[0].interrupts:
+                interrupt_value = tasks[0].interrupts[0].value
+            else:
+                interrupt_value = {}
+
             clarification_count = state.values.get("clarification_count", 0) if state.values else 0
 
             await _update_db_session(
@@ -184,14 +205,24 @@ async def _run_discovery(
                 "suggestions": interrupt_value.get("suggestions", []),
                 "reason": interrupt_value.get("reason", ""),
             })
-        else:
+        elif not result_sent:
             final_state = state.values or {}
-            if final_state.get("person_profile") and final_state.get("status") == "complete":
+            if final_state.get("person_profile"):
                 profile = final_state["person_profile"]
+                confidence = final_state.get("confidence_score", 0)
+
+                await _save_profile_record(session_id, profile)
+                await _update_db_session(
+                    session_id,
+                    status="complete",
+                    confidence=confidence,
+                    profile=profile,
+                )
+
                 await websocket.send_json({
                     "type": "result",
                     "profile": profile,
-                    "confidence": final_state.get("confidence_score", 0),
+                    "confidence": confidence,
                 })
 
     except Exception as e:

@@ -2,7 +2,6 @@ import asyncio
 import logging
 from app.agent.state import AgentState
 from app.tools.tavily_search import search_tavily
-from app.tools.youtube_search import search_youtube
 from app.tools.github_search import search_github_users
 
 logger = logging.getLogger(__name__)
@@ -60,10 +59,6 @@ async def _with_timeout(coro, timeout: int = SEARCH_TIMEOUT):
 
 async def _run_tavily_search(query: str, search_type: str):
     return await search_tavily(query, search_type=search_type, max_results=3)
-
-
-async def _run_youtube_search(query: str):
-    return await search_youtube(query, max_results=2)
 
 
 async def _run_github_api_search(query: str):

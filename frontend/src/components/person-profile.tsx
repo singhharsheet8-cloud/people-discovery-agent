@@ -10,6 +10,22 @@ interface PersonProfileProps {
 }
 
 export function PersonProfile({ profile }: PersonProfileProps) {
+  const name = profile.name || "Unknown";
+  const keyFacts = profile.key_facts ?? [];
+  const expertise = profile.expertise ?? [];
+  const education = profile.education ?? [];
+  const notableWork = profile.notable_work ?? [];
+  const socialLinks = profile.social_links ?? {};
+  const sources = profile.sources ?? [];
+
+  const initials = name
+    .split(" ")
+    .filter(Boolean)
+    .map((n) => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "?";
+
   return (
     <div className="glass rounded-2xl overflow-hidden animate-slide-up">
       {/* Header */}
@@ -17,15 +33,10 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-brand-400 to-purple-500 flex items-center justify-center text-2xl font-bold text-white">
-              {profile.name
-                .split(" ")
-                .map((n) => n[0])
-                .join("")
-                .slice(0, 2)
-                .toUpperCase()}
+              {initials}
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">{profile.name}</h2>
+              <h2 className="text-xl font-bold text-white">{name}</h2>
               {profile.current_role && (
                 <div className="flex items-center gap-1.5 text-gray-300 mt-1">
                   <Briefcase size={14} />
@@ -60,10 +71,10 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Key Facts */}
-        {profile.key_facts.length > 0 && (
+        {keyFacts.length > 0 && (
           <Section title="Key Facts" icon={Lightbulb}>
             <ul className="space-y-1.5">
-              {profile.key_facts.map((fact, i) => (
+              {keyFacts.map((fact, i) => (
                 <li key={i} className="text-sm text-gray-300 flex items-start gap-2">
                   <span className="text-brand-400 mt-1 shrink-0">&#x2022;</span>
                   {fact}
@@ -74,10 +85,10 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Expertise */}
-        {profile.expertise.length > 0 && (
+        {expertise.length > 0 && (
           <Section title="Expertise" icon={Trophy}>
             <div className="flex flex-wrap gap-2">
-              {profile.expertise.map((skill, i) => (
+              {expertise.map((skill, i) => (
                 <span
                   key={i}
                   className="px-2.5 py-1 rounded-full text-xs font-medium bg-brand-500/15 text-brand-300 border border-brand-500/20"
@@ -90,10 +101,10 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Education */}
-        {profile.education.length > 0 && (
+        {education.length > 0 && (
           <Section title="Education" icon={GraduationCap}>
             <ul className="space-y-1">
-              {profile.education.map((edu, i) => (
+              {education.map((edu, i) => (
                 <li key={i} className="text-sm text-gray-300">{edu}</li>
               ))}
             </ul>
@@ -101,10 +112,10 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Notable Work */}
-        {profile.notable_work.length > 0 && (
+        {notableWork.length > 0 && (
           <Section title="Notable Work" icon={Trophy}>
             <ul className="space-y-1">
-              {profile.notable_work.map((work, i) => (
+              {notableWork.map((work, i) => (
                 <li key={i} className="text-sm text-gray-300">{work}</li>
               ))}
             </ul>
@@ -112,12 +123,12 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Social Links */}
-        {Object.keys(profile.social_links).length > 0 && (
+        {Object.keys(socialLinks).length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {Object.entries(profile.social_links).map(([platform, url]) => (
+            {Object.entries(socialLinks).map(([platform, url]) => (
               <a
                 key={platform}
-                href={url}
+                href={typeof url === "string" ? url : "#"}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium glass glass-hover text-gray-300"
@@ -130,13 +141,13 @@ export function PersonProfile({ profile }: PersonProfileProps) {
         )}
 
         {/* Sources */}
-        {profile.sources.length > 0 && (
+        {sources.length > 0 && (
           <div>
             <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">
-              Sources ({profile.sources.length})
+              Sources ({sources.length})
             </h3>
             <div className="space-y-2">
-              {profile.sources.map((source, i) => (
+              {sources.map((source, i) => (
                 <SourceCard key={i} source={source} />
               ))}
             </div>

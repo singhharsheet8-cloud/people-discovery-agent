@@ -12,25 +12,45 @@ export function useAgent() {
   const [isSearching, setIsSearching] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingQueryRef = useRef<string | null>(null);
+  const intentionalCloseRef = useRef(false);
 
   const addMessage = useCallback((msg: ChatMessage) => {
     setMessages((prev) => [...prev, msg]);
   }, []);
 
   const connect = useCallback((sid?: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      return sessionId || sid || "";
+    }
+
     const id = sid || crypto.randomUUID();
     const url = `${WS_URL}/${id}`;
 
+    intentionalCloseRef.current = false;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
       setIsConnected(true);
       setSessionId(id);
+
+      if (pendingQueryRef.current) {
+        const q = pendingQueryRef.current;
+        pendingQueryRef.current = null;
+        setIsSearching(true);
+        ws.send(JSON.stringify({ type: "query", text: q }));
+      }
     };
 
     ws.onmessage = (event) => {
-      const data: WSMessage = JSON.parse(event.data);
+      let data: WSMessage;
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
 
       switch (data.type) {
         case "connected":
@@ -64,7 +84,27 @@ export function useAgent() {
         case "result":
           setIsSearching(false);
           if (data.profile) {
-            const p = { ...data.profile, confidence_score: data.confidence || data.profile.confidence_score || 0 };
+            const p: PersonProfile = {
+              name: data.profile.name || "Unknown",
+              confidence_score: data.confidence || data.profile.confidence_score || 0,
+              current_role: data.profile.current_role,
+              company: data.profile.company,
+              location: data.profile.location,
+              bio: data.profile.bio,
+              linkedin_url: data.profile.linkedin_url,
+              key_facts: data.profile.key_facts || [],
+              education: data.profile.education || [],
+              expertise: data.profile.expertise || [],
+              notable_work: data.profile.notable_work || [],
+              social_links: data.profile.social_links || {},
+              sources: (data.profile.sources || []).map((s) => ({
+                title: s.title || "",
+                url: s.url || "",
+                platform: s.platform || "web",
+                snippet: s.snippet || "",
+                relevance_score: s.relevance_score ?? 0.5,
+              })),
+            };
             setProfile(p);
             addMessage({
               id: crypto.randomUUID(),
@@ -90,26 +130,21 @@ export function useAgent() {
 
     ws.onclose = () => {
       setIsConnected(false);
-      setIsSearching(false);
+      if (!intentionalCloseRef.current) {
+        reconnectTimerRef.current = setTimeout(() => {
+          connect(id);
+        }, 3000);
+      }
     };
 
     ws.onerror = () => {
       setIsConnected(false);
-      setIsSearching(false);
     };
 
     return id;
-  }, [addMessage]);
+  }, [addMessage, sessionId]);
 
   const sendQuery = useCallback((query: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      const newId = connect();
-      setTimeout(() => {
-        wsRef.current?.send(JSON.stringify({ type: "query", text: query }));
-      }, 500);
-      return;
-    }
-
     setIsSearching(true);
     setProfile(null);
     addMessage({
@@ -118,6 +153,13 @@ export function useAgent() {
       content: query,
       timestamp: new Date(),
     });
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      pendingQueryRef.current = query;
+      connect();
+      return;
+    }
+
     wsRef.current.send(JSON.stringify({ type: "query", text: query }));
   }, [connect, addMessage]);
 
@@ -141,6 +183,7 @@ export function useAgent() {
       if (!res.ok) return;
       const data = await res.json();
 
+      intentionalCloseRef.current = true;
       wsRef.current?.close();
       wsRef.current = null;
       setMessages([]);
@@ -158,7 +201,27 @@ export function useAgent() {
       }
 
       if (data.profile) {
-        const p = { ...data.profile, confidence_score: data.confidence_score || data.profile.confidence_score || 0 };
+        const p: PersonProfile = {
+          name: data.profile.name || "Unknown",
+          confidence_score: data.confidence_score || data.profile.confidence_score || 0,
+          current_role: data.profile.current_role,
+          company: data.profile.company,
+          location: data.profile.location,
+          bio: data.profile.bio,
+          linkedin_url: data.profile.linkedin_url,
+          key_facts: data.profile.key_facts || [],
+          education: data.profile.education || [],
+          expertise: data.profile.expertise || [],
+          notable_work: data.profile.notable_work || [],
+          social_links: data.profile.social_links || {},
+          sources: (data.profile.sources || []).map((s: Record<string, unknown>) => ({
+            title: (s.title as string) || "",
+            url: (s.url as string) || "",
+            platform: (s.platform as string) || "web",
+            snippet: (s.snippet as string) || "",
+            relevance_score: (s.relevance_score as number) ?? 0.5,
+          })),
+        };
         setProfile(p);
         setMessages((prev) => [...prev, {
           id: crypto.randomUUID(),
@@ -176,6 +239,11 @@ export function useAgent() {
   }, []);
 
   const reset = useCallback(() => {
+    intentionalCloseRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     wsRef.current?.close();
     wsRef.current = null;
     setMessages([]);
@@ -187,6 +255,8 @@ export function useAgent() {
 
   useEffect(() => {
     return () => {
+      intentionalCloseRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
     };
   }, []);

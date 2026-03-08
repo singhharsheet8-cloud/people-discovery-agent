@@ -201,9 +201,9 @@ function MessageBubble({
         {/* Suggestion chips for clarification */}
         {message.data?.type === "clarification" && message.data.suggestions && message.data.suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {message.data.suggestions.map((suggestion) => (
+            {message.data.suggestions.map((suggestion, idx) => (
               <button
-                key={suggestion}
+                key={`${suggestion}-${idx}`}
                 onClick={() => onSuggestionClick(suggestion)}
                 disabled={isSearching}
                 className={cn(

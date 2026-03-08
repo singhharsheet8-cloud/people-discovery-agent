@@ -40,7 +40,7 @@ export function SessionHistory({ onLoadSession, currentSessionId }: SessionHisto
 
   useEffect(() => {
     fetchSessions();
-  }, []);
+  }, [currentSessionId]);
 
   const deleteSession = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();

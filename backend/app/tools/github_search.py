@@ -33,9 +33,17 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
             response.raise_for_status()
             data = response.json()
 
+        import asyncio
+        users = data.get("items", [])[:max_results]
+        profiles = await asyncio.gather(
+            *[_get_user_profile(u["login"]) for u in users],
+            return_exceptions=True,
+        )
+
         results = []
-        for user in data.get("items", [])[:max_results]:
-            profile = await _get_user_profile(user["login"])
+        for user, profile in zip(users, profiles):
+            if isinstance(profile, Exception):
+                profile = {}
             bio_parts = []
             if profile.get("bio"):
                 bio_parts.append(profile["bio"])

@@ -56,7 +56,7 @@ export function SourceCard({ source }: SourceCardProps) {
           )}
         </div>
         <div className="text-xs text-gray-500 shrink-0">
-          {Math.round(source.relevance_score * 100)}%
+          {Math.round((source.relevance_score ?? 0.5) * 100)}%
         </div>
       </div>
     </a>

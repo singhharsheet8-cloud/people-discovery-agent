@@ -1,4 +1,6 @@
 import logging
+import threading
+from collections import OrderedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from app.agent.state import AgentState
@@ -69,5 +71,25 @@ def build_graph() -> StateGraph:
     return builder
 
 
-checkpointer = MemorySaver()
+class BoundedMemorySaver(MemorySaver):
+    """MemorySaver that evicts oldest sessions when capacity is exceeded."""
+
+    def __init__(self, max_sessions: int = 200):
+        super().__init__()
+        self._max = max_sessions
+        self._access_order: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, config, checkpoint, metadata, new_versions):
+        thread_id = config.get("configurable", {}).get("thread_id", "")
+        with self._lock:
+            self._access_order.pop(thread_id, None)
+            self._access_order[thread_id] = None
+            while len(self._access_order) > self._max:
+                evicted, _ = self._access_order.popitem(last=False)
+                self.storage.pop(evicted, None)
+        return super().put(config, checkpoint, metadata, new_versions)
+
+
+checkpointer = BoundedMemorySaver(max_sessions=200)
 graph = build_graph().compile(checkpointer=checkpointer)
