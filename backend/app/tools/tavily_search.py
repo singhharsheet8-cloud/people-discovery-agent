@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 SEARCH_TYPE_CONFIG = {
     "linkedin": {
         "include_domains": ["linkedin.com/in"],
-        "search_depth": "advanced",
-        "include_raw_content": True,
+        "search_depth": "basic",
+        "include_raw_content": False,
         "topic": "general",
     },
     "youtube": {
@@ -45,8 +45,8 @@ SEARCH_TYPE_CONFIG = {
     },
     "crunchbase": {
         "include_domains": ["crunchbase.com"],
-        "search_depth": "advanced",
-        "include_raw_content": True,
+        "search_depth": "basic",
+        "include_raw_content": False,
         "topic": "general",
     },
     "blog": {
@@ -101,7 +101,7 @@ async def search_tavily(
             content = item.get("content", "")
             raw = item.get("raw_content", "")
             if raw and len(raw) > len(content):
-                content = raw[:2000]
+                content = raw[:1000]
 
             results.append(
                 SearchResult(

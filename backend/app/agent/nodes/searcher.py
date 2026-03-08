@@ -7,6 +7,8 @@ from app.tools.github_search import search_github_users
 
 logger = logging.getLogger(__name__)
 
+SEARCH_TIMEOUT = 10  # seconds per individual search
+
 
 async def execute_searches(state: AgentState) -> dict:
     queries = state.get("search_queries", [])
@@ -18,12 +20,11 @@ async def execute_searches(state: AgentState) -> dict:
         search_type = q.get("search_type", "web") if isinstance(q, dict) else "web"
 
         if search_type == "youtube":
-            tasks.append(_run_youtube_search(query_str))
+            tasks.append(_with_timeout(_run_youtube_search(query_str)))
+        elif search_type == "github":
+            tasks.append(_with_timeout(_run_github_api_search(query_str)))
 
-        if search_type == "github":
-            tasks.append(_run_github_api_search(query_str))
-
-        tasks.append(_run_tavily_search(query_str, search_type))
+        tasks.append(_with_timeout(_run_tavily_search(query_str, search_type)))
 
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -31,8 +32,9 @@ async def execute_searches(state: AgentState) -> dict:
     seen_urls = {r.get("url") for r in existing_results if isinstance(r, dict)}
 
     for result_list in batch_results:
-        if isinstance(result_list, Exception):
-            logger.warning(f"Search task failed: {result_list}")
+        if isinstance(result_list, (Exception, type(None))):
+            if isinstance(result_list, Exception):
+                logger.warning(f"Search task failed: {result_list}")
             continue
         for result in result_list:
             result_dict = result.model_dump() if hasattr(result, "model_dump") else result
@@ -50,13 +52,21 @@ async def execute_searches(state: AgentState) -> dict:
     }
 
 
+async def _with_timeout(coro, timeout: int = SEARCH_TIMEOUT):
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"Search timed out after {timeout}s")
+        return []
+
+
 async def _run_tavily_search(query: str, search_type: str):
-    return await search_tavily(query, search_type=search_type, max_results=5)
+    return await search_tavily(query, search_type=search_type, max_results=3)
 
 
 async def _run_youtube_search(query: str):
-    return await search_youtube(query, max_results=3)
+    return await search_youtube(query, max_results=2)
 
 
 async def _run_github_api_search(query: str):
-    return await search_github_users(query, max_results=3)
+    return await search_github_users(query, max_results=2)

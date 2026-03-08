@@ -139,6 +139,9 @@ async def _run_discovery(
     try:
         async for event in graph.astream(input_data, config, stream_mode="updates"):
             for node_name, node_output in event.items():
+                if node_name == "__interrupt__" or not isinstance(node_output, dict):
+                    continue
+
                 status_msg = NODE_STATUS_MAP.get(node_name, f"Processing: {node_name}")
                 await websocket.send_json({
                     "type": "status",

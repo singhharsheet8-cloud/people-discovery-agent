@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
-    confidence_threshold: float = 0.65
-    max_clarifications: int = 3
-    max_search_queries: int = 6
+    confidence_threshold: float = 0.50
+    max_clarifications: int = 2
+    max_search_queries: int = 4
 
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
     cache_ttl_seconds: int = 3600
