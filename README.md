@@ -1,91 +1,72 @@
 # People Discovery Agent
 
-An AI-powered agent that discovers comprehensive information about any person by searching across LinkedIn, YouTube, GitHub, news articles, academic papers, and the open web — then synthesizes everything into a structured profile with confidence scoring.
+An AI-powered agent that discovers comprehensive information about any person by searching across LinkedIn, YouTube, GitHub, news articles, academic papers, and the open web — then synthesizes everything into a structured profile with a multi-factor confidence score.
 
-Built with **LangGraph** (stateful agent orchestration), **FastAPI** (async backend), and **Next.js 14** (real-time frontend).
+Built with **LangGraph** for stateful agent orchestration (with human-in-the-loop), **FastAPI** for the async backend, and **Next.js 14** for a real-time streaming frontend.
 
-## Architecture
+**Live demo:** Frontend on [Vercel](https://frontend-dj01isx7u-harsheets-projects-33a318bf.vercel.app) | Backend on [Railway](https://railway.app)
+
+---
+
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Next.js Frontend                         │
-│  ┌──────────────┐  ┌────────────────┐  ┌─────────────────────┐ │
-│  │ Chat         │  │ Search         │  │ Person Profile      │ │
-│  │ Interface    │  │ Progress       │  │ Card + Sources      │ │
-│  └──────┬───────┘  └────────────────┘  └─────────────────────┘ │
-│         │ WebSocket                                             │
-└─────────┼───────────────────────────────────────────────────────┘
-          │
-┌─────────┼───────────────────────────────────────────────────────┐
-│         ▼          FastAPI Backend                               │
-│  ┌──────────────────────────────────────────────────────┐       │
-│  │              LangGraph Agent                          │       │
-│  │                                                       │       │
-│  │  START ──► Plan ──► Search ──► Analyze ──► Confidence │       │
-│  │             ▲                                 │       │       │
-│  │             │        ┌─── < threshold ────────┘       │       │
-│  │             │        ▼                                │       │
-│  │             └── Clarify (interrupt, wait for user)    │       │
-│  │                      │                                │       │
-│  │                      └─── >= threshold ──► Synthesize │       │
-│  │                                               │       │       │
-│  │                                              END      │       │
-│  └──────────────────────────────────────────────────────┘       │
-│         │                                                        │
-│  ┌──────┼──────────────────────────────────────────────────┐    │
-│  │      ▼         Search Tools                              │    │
-│  │  ┌─────────┐  ┌───────────┐  ┌──────────┐  ┌─────────┐ │    │
-│  │  │ Tavily  │  │ YouTube   │  │ GitHub   │  │  News   │ │    │
-│  │  │ Web     │  │ Data API  │  │ API      │  │ (Tavily)│ │    │
-│  │  └─────────┘  └───────────┘  └──────────┘  └─────────┘ │    │
-│  └──────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │  SQLite/PostgreSQL: Sessions • Profiles • Search Cache    │    │
-│  └──────────────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────────────┘
+User: "Find Satya Nadella"
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│                  LangGraph Agent                     │
+│                                                      │
+│  1. PLAN    → Generate 6 targeted search queries     │
+│  2. SEARCH  → Execute in parallel across 7+ sources  │
+│  3. ANALYZE → Cross-reference and identify matches    │
+│  4. SCORE   → Multi-factor confidence calculation     │
+│       │                                               │
+│       ├── confidence ≥ 65% → SYNTHESIZE → profile    │
+│       └── confidence < 65% → CLARIFY → ask user      │
+│                                  │                    │
+│                                  └── loop back to 1   │
+└─────────────────────────────────────────────────────┘
+         │
+         ▼
+Result: Structured profile with 95% confidence, 7 sources
 ```
+
+The agent searches **LinkedIn** (via Tavily domain filter), **YouTube**, **GitHub**, **news**, **academic papers**, **Crunchbase**, **blogs**, and **Twitter/X** — all in parallel. When results are ambiguous (e.g., common names), it asks targeted follow-up questions using LangGraph's `interrupt()` mechanism, then resumes with preserved state.
+
+---
 
 ## Key Features
 
-- **Multi-source search** — Searches LinkedIn, YouTube, GitHub, news, academic, Crunchbase, blogs, and Twitter in parallel via Tavily + dedicated APIs
-- **Agentic clarification loop** — Asks targeted follow-up questions when results are ambiguous (e.g., "Which John Smith? The one at Google or Meta?")
-- **Confidence scoring** — Multi-factor scoring (identity consistency, source diversity, information richness, cross-referencing) with visual gauge
-- **Real-time streaming** — WebSocket-based status updates as the agent works through each step
-- **Multi-provider LLM** — GPT-5-mini (default), Llama 3.3 on Groq (free), or DeepSeek on Together AI — all swappable via env vars
-- **Human-in-the-loop** — LangGraph `interrupt()` pauses execution to collect user input, then resumes seamlessly
-- **Persistent storage** — SQLite (default) / PostgreSQL for sessions, profiles, and search history
-- **Search result caching** — DB-backed TTL cache avoids redundant API calls across sessions
-- **Session history** — Browse, reload, and delete past discovery sessions from the sidebar
+| Feature | Description |
+|---------|-------------|
+| **Multi-source search** | 7+ source types searched in parallel via Tavily + YouTube Data API + GitHub API |
+| **Agentic clarification loop** | Asks targeted follow-ups when ambiguous ("Which John Smith — Google or Meta?") |
+| **Confidence scoring** | Multi-factor algorithm: identity consistency (30%), source diversity (20%), information richness (20%), cross-referencing (30%) |
+| **Real-time streaming** | WebSocket pushes status updates as the agent progresses through each step |
+| **Multi-provider LLM** | GPT-5-mini, Llama 3.3 (Groq free tier), DeepSeek V3, Qwen 2.5 — all swappable via env var |
+| **Human-in-the-loop** | LangGraph `interrupt()` pauses execution, collects user input, resumes seamlessly |
+| **Persistent storage** | SQLite (default) / PostgreSQL for sessions, profiles, and search cache |
+| **Session history** | Browse, reload, and delete past discovery sessions from the sidebar |
+| **Cross-platform SSL** | `truststore` + `certifi` fallback ensures HTTPS works on macOS, Linux, and Windows |
 
-## Confidence Scoring Algorithm
-
-The confidence score (0–100%) is calculated from four weighted factors:
-
-| Factor | Weight | What it measures |
-|--------|--------|-----------------|
-| Identity Consistency | 30% | Single clear match vs multiple ambiguous people |
-| Source Diversity | 20% | Found on 2+ platforms (LinkedIn + YouTube + news) |
-| Information Richness | 20% | How many profile fields are filled (role, company, education, etc.) |
-| Cross-Reference Match | 30% | Details corroborate across independent sources |
-
-If confidence < 65%, the agent asks for clarification (up to 3 rounds).
+---
 
 ## Tech Stack
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Agent Framework | LangGraph | State machine with `interrupt()` for human-in-the-loop |
-| Backend | FastAPI + Pydantic | Async Python, WebSocket, typed validation |
-| Frontend | Next.js 14 + Tailwind + shadcn/ui | Polished dark UI with real-time updates |
-| Database | SQLite + SQLAlchemy 2.0 async | Zero-config persistence, upgradeable to PostgreSQL |
-| Caching | DB-backed TTL cache | SHA-256 keyed, configurable expiration |
-| Web Search | Tavily API | Parsed content (not just URLs), 1000 free searches/month |
-| Video Search | YouTube Data API v3 | Optional, falls back to Tavily |
-| Code Search | GitHub API | Free, no API key required |
-| LLM (planning) | GPT-5-mini | $0.25/$2.00 per 1M tokens, swappable to Groq/Together |
-| LLM (synthesis) | Claude Sonnet 4.5 | Best synthesis quality |
-| Deployment | Docker + Railway | Containerized, one-click deploy |
+| Agent Framework | **LangGraph** | State machine with `interrupt()` for human-in-the-loop, checkpointing |
+| Backend | **FastAPI** + Pydantic v2 | Async Python, native WebSocket, typed request/response validation |
+| Frontend | **Next.js 14** + Tailwind CSS | Server components, real-time dark UI, responsive design |
+| Database | **SQLite** + SQLAlchemy 2.0 async | Zero-config, upgradeable to PostgreSQL with one env var |
+| Caching | DB-backed TTL cache | SHA-256 keyed, configurable expiration, avoids redundant API calls |
+| Web Search | **Tavily API** | Returns parsed content (not raw URLs), domain-specific filtering |
+| Video Search | **YouTube Data API v3** | Optional, falls back to Tavily YouTube domain filter |
+| Code Search | **GitHub API** | PAT optional (60 req/hr free, 5000 with token) |
+| LLM (planning) | **GPT-5-mini** | $0.25/$2.00 per 1M tokens — runs 3-5x per query |
+| LLM (synthesis) | **GPT-5-mini** / Claude Sonnet 4.5 | Configurable — use best available for final profile |
+| Deployment | **Railway** (backend) + **Vercel** (frontend) | Auto-deploy from GitHub on push |
 
 ### LLM Provider Options
 
@@ -97,17 +78,19 @@ All providers use OpenAI-compatible APIs — switch with a single env var:
 | **Groq** | `llama-3.3-70b-versatile` | ~$0.06 | ~$0.06 | Ultra-fast, free tier |
 | **Together AI** | `deepseek-ai/DeepSeek-V3` | $0.14 | $0.28 | Cheapest quality option |
 | **Together AI** | `Qwen/Qwen2.5-72B-Instruct-Turbo` | ~$0.12 | ~$0.12 | 97% F1 tool accuracy |
-| **Anthropic** | `claude-sonnet-4-5-20241022` | $3.00 | $15.00 | Synthesis (default) |
+| **Anthropic** | `claude-sonnet-4-5-20241022` | $3.00 | $15.00 | Premium synthesis |
 
-**Estimated cost per query: ~$0.02–0.08** (depending on provider choice)
+**Estimated cost per query: ~$0.02–0.08** depending on provider.
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.10+ (3.11+ recommended)
 - Node.js 18+
-- API keys (see below)
+- API keys (see table below)
 
 ### Required API Keys
 
@@ -115,19 +98,19 @@ All providers use OpenAI-compatible APIs — switch with a single env var:
 |-----|-----------|-----------|-----------|
 | `OPENAI_API_KEY` | Yes (unless using Groq/Together) | Pay-as-you-go | [platform.openai.com](https://platform.openai.com) |
 | `TAVILY_API_KEY` | **Yes** | 1000 searches/month | [tavily.com](https://tavily.com) |
-| `ANTHROPIC_API_KEY` | Recommended | Pay-as-you-go | [console.anthropic.com](https://console.anthropic.com) |
+| `ANTHROPIC_API_KEY` | Optional | Pay-as-you-go | [console.anthropic.com](https://console.anthropic.com) |
 | `GROQ_API_KEY` | Optional | Free tier available | [console.groq.com](https://console.groq.com) |
 | `TOGETHER_API_KEY` | Optional | $5 free credits | [together.ai](https://together.ai) |
-| `GITHUB_TOKEN` | Optional | 5000 req/hr (vs 60 unauthenticated) | [github.com/settings/tokens](https://github.com/settings/tokens) |
+| `GITHUB_TOKEN` | Optional | 5000 req/hr (vs 60) | [github.com/settings/tokens](https://github.com/settings/tokens) |
 | `YOUTUBE_API_KEY` | Optional | 10,000 units/day | [console.cloud.google.com](https://console.cloud.google.com) |
 
-### Option A: Automated Setup (recommended)
+### Option A: One-command setup (recommended)
 
 ```bash
-git clone <repo-url>
-cd people_discovery_agent
+git clone https://github.com/singhharsheet8-cloud/people-discovery-agent.git
+cd people-discovery-agent
 
-# Edit backend/.env with your API keys (created from template on first run)
+# Creates venv, installs deps, validates API keys
 ./setup.sh
 
 # Start backend (Terminal 1)
@@ -138,24 +121,26 @@ uvicorn app.main:app --reload --port 8000
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and start searching.
+Open [http://localhost:3000](http://localhost:3000) and search for anyone.
 
-### Option B: Run the test suite
+### Option B: Run the automated test suite
 
 ```bash
-# Runs the backend, hits every endpoint, and does a full WebSocket discovery
+# Starts backend, tests all 8 endpoints + full WebSocket discovery
 ./test.sh
 ```
 
-### Option C: Manual Setup
+Tests include: health check, session CRUD, full WebSocket discovery flow (real LLM + search calls), profile search, and cache cleanup.
+
+### Option C: Manual setup
 
 ```bash
 # Backend
 cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env      # Edit with your API keys
+cp .env.example .env       # Edit with your API keys
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (new terminal)
@@ -169,17 +154,17 @@ npm run dev
 
 ```bash
 cp backend/.env.example backend/.env
-# Fill in API keys
+# Edit backend/.env with your API keys
 
 docker compose up --build
 # Backend: http://localhost:8000
 # Frontend: http://localhost:3000
 ```
 
-### Example: Free-tier setup with Groq
+### Free-tier setup (no OpenAI needed)
 
 ```env
-# backend/.env
+# backend/.env — runs entirely on Groq's free tier
 GROQ_API_KEY=gsk_...
 PLANNING_MODEL=llama-3.3-70b-versatile
 PLANNING_BASE_URL=https://api.groq.com/openai/v1
@@ -187,7 +172,7 @@ SYNTHESIS_MODEL=llama-3.3-70b-versatile
 TAVILY_API_KEY=tvly-...
 ```
 
-No OpenAI or Anthropic keys needed — runs entirely on Groq's free tier.
+---
 
 ## API Reference
 
@@ -197,7 +182,7 @@ No OpenAI or Anthropic keys needed — runs entirely on Groq's free tier.
 |--------|------|-------------|
 | `POST` | `/api/discover` | Create a new discovery session |
 | `GET` | `/api/sessions` | List sessions (`?limit=20`) |
-| `GET` | `/api/sessions/{id}` | Get session with profile data |
+| `GET` | `/api/sessions/{id}` | Get session with full profile data |
 | `DELETE` | `/api/sessions/{id}` | Delete a session |
 | `GET` | `/api/profiles/search?name=X` | Search previously discovered profiles |
 | `POST` | `/api/cache/cleanup` | Remove expired cache entries |
@@ -205,67 +190,114 @@ No OpenAI or Anthropic keys needed — runs entirely on Groq's free tier.
 
 ### WebSocket Protocol
 
-Connect to `ws://host/api/ws/{session_id}`
+Connect to `ws://host/api/ws` or `ws://host/api/ws/{session_id}`
 
 **Client → Server:**
+
 ```json
-{"type": "query", "text": "Find Andrej Karpathy"}
-{"type": "clarification_response", "text": "He previously worked at Tesla"}
+{ "type": "query", "text": "Find Andrej Karpathy" }
+{ "type": "clarification_response", "text": "He previously worked at Tesla" }
 ```
 
 **Server → Client:**
+
 ```json
-{"type": "status", "step": "execute_searches", "message": "Searching LinkedIn..."}
-{"type": "clarification", "question": "Which company?", "suggestions": ["Google", "Meta"]}
-{"type": "result", "profile": {...}, "confidence": 0.92}
+{ "type": "connected", "session_id": "uuid" }
+{ "type": "status", "step": "execute_searches", "message": "Searching LinkedIn..." }
+{ "type": "clarification", "question": "Which company?", "suggestions": ["Google", "Meta"] }
+{ "type": "result", "profile": { "name": "...", "confidence_score": 0.95, ... }, "confidence": 0.95 }
+{ "type": "error", "message": "..." }
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Next.js 14 Frontend                         │
+│  ┌──────────────┐  ┌────────────────┐  ┌─────────────────────┐ │
+│  │ Chat         │  │ Search         │  │ Person Profile      │ │
+│  │ Interface    │  │ Progress       │  │ Card + Sources      │ │
+│  └──────┬───────┘  └────────────────┘  └─────────────────────┘ │
+│         │ WebSocket                                             │
+└─────────┼───────────────────────────────────────────────────────┘
+          │
+┌─────────┼───────────────────────────────────────────────────────┐
+│         ▼          FastAPI Backend                               │
+│  ┌──────────────────────────────────────────────────────┐       │
+│  │              LangGraph Agent                          │       │
+│  │                                                       │       │
+│  │  START → Plan → Search → Analyze → Confidence Check   │       │
+│  │            ▲                            │              │       │
+│  │            │     ┌── < threshold ───────┘              │       │
+│  │            │     ▼                                     │       │
+│  │            └── Clarify (interrupt → wait for user)     │       │
+│  │                  │                                     │       │
+│  │                  └── ≥ threshold → Synthesize → END    │       │
+│  └──────────────────────────────────────────────────────┘       │
+│         │                                                        │
+│  ┌──────┼──────────────────────────────────────────────────┐    │
+│  │      ▼         Search Tools (parallel)                   │    │
+│  │  ┌─────────┐ ┌───────────┐ ┌──────────┐ ┌────────────┐ │    │
+│  │  │ Tavily  │ │ YouTube   │ │ GitHub   │ │ News/      │ │    │
+│  │  │ Web     │ │ Data API  │ │ API      │ │ Academic   │ │    │
+│  │  └─────────┘ └───────────┘ └──────────┘ └────────────┘ │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  SQLite / PostgreSQL                                      │    │
+│  │  Sessions • Profiles • Search Cache (SHA-256, TTL)        │    │
+│  └──────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
 
 ```
-people_discovery_agent/
+people-discovery-agent/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                 # FastAPI app with lifespan (DB init/shutdown)
-│   │   ├── config.py               # Settings + LLM factory (get_planning_llm, get_synthesis_llm)
+│   │   ├── main.py                 # FastAPI app, SSL fix, lifespan (DB init/close)
+│   │   ├── config.py               # Settings + LLM factories (get_planning_llm, get_synthesis_llm)
 │   │   ├── db.py                   # SQLAlchemy async engine & session factory
 │   │   ├── cache.py                # DB-backed TTL cache for search results
 │   │   ├── agent/
 │   │   │   ├── graph.py            # LangGraph state machine with conditional routing
 │   │   │   ├── state.py            # TypedDict agent state definition
 │   │   │   └── nodes/
-│   │   │       ├── planner.py      # LLM-powered search query generation
-│   │   │       ├── searcher.py     # Parallel search execution (Tavily + YouTube + GitHub)
-│   │   │       ├── analyzer.py     # Cross-reference analysis and person identification
-│   │   │       ├── confidence.py   # Multi-factor confidence scoring
-│   │   │       ├── clarifier.py    # Clarification via LangGraph interrupt()
-│   │   │       └── synthesizer.py  # Final profile synthesis with premium LLM
+│   │   │       ├── planner.py      # LLM generates targeted search queries
+│   │   │       ├── searcher.py     # Parallel execution (Tavily + YouTube + GitHub)
+│   │   │       ├── analyzer.py     # Cross-reference analysis, person identification
+│   │   │       ├── confidence.py   # Multi-factor confidence scoring algorithm
+│   │   │       ├── clarifier.py    # Human-in-the-loop via LangGraph interrupt()
+│   │   │       └── synthesizer.py  # Final profile synthesis with LLM
 │   │   ├── tools/
-│   │   │   ├── tavily_search.py    # Tavily web/domain search with caching
-│   │   │   ├── youtube_search.py   # YouTube Data API v3
+│   │   │   ├── tavily_search.py    # Tavily web/domain search with DB caching
+│   │   │   ├── youtube_search.py   # YouTube Data API v3 (optional)
 │   │   │   └── github_search.py    # GitHub user/profile search (PAT optional)
 │   │   ├── models/
 │   │   │   ├── person.py           # PersonProfile, PersonSource Pydantic models
 │   │   │   ├── search.py           # SearchQuery, SearchResult Pydantic models
-│   │   │   └── db_models.py        # SQLAlchemy ORM (DiscoverySession, PersonProfileRecord, SearchCacheEntry)
+│   │   │   └── db_models.py        # SQLAlchemy ORM models
 │   │   └── api/
 │   │       ├── routes.py           # REST endpoints (CRUD sessions, profiles, cache)
-│   │       └── websocket.py        # WebSocket handler with DB persistence
+│   │       └── websocket.py        # WebSocket handler with real-time streaming
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── .env.example
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx            # Main page with chat, profile panel, history sidebar
-│   │   │   └── layout.tsx          # Root layout and metadata
+│   │   │   ├── page.tsx            # Main page: chat + profile panel + history sidebar
+│   │   │   └── layout.tsx          # Root layout with metadata
 │   │   ├── components/
-│   │   │   ├── chat-interface.tsx   # Chat input, messages, example prompts
+│   │   │   ├── chat-interface.tsx   # Chat input with example prompts
 │   │   │   ├── person-profile.tsx   # Profile card (bio, facts, expertise, sources)
 │   │   │   ├── confidence-score.tsx # Animated circular confidence gauge
-│   │   │   ├── source-card.tsx      # Source card with platform icon and relevance
+│   │   │   ├── source-card.tsx      # Source card with platform icon + relevance
 │   │   │   ├── search-progress.tsx  # Step-by-step agent progress indicator
-│   │   │   └── session-history.tsx  # Session list with load/delete
+│   │   │   └── session-history.tsx  # Session list with load/delete actions
 │   │   ├── hooks/
 │   │   │   └── use-agent.ts        # WebSocket hook for agent communication
 │   │   └── lib/
@@ -273,80 +305,120 @@ people_discovery_agent/
 │   │       └── utils.ts            # Utilities (cn, confidence labels/colors)
 │   ├── package.json
 │   ├── Dockerfile
-│   ├── .env.example
-│   ├── tailwind.config.ts
-│   └── next.config.js
-├── docker-compose.yml
-├── railway.toml                    # Railway deployment (backend)
-├── setup.sh                        # One-command setup (venv, deps, env check)
-├── test.sh                         # End-to-end test suite (starts server, tests all endpoints)
+│   └── .env.example
+├── docker-compose.yml              # Local multi-service orchestration
+├── railway.toml                    # Railway deployment config (backend)
+├── setup.sh                        # One-command setup (venv, deps, env validation)
+├── test.sh                         # Automated test suite (8 tests, full E2E)
 ├── .gitignore
 └── README.md
 ```
 
+---
+
 ## Deployment
 
-### Railway (recommended)
+### Backend → Railway
 
-1. Push to GitHub
-2. Create a new Railway project
-3. Add a service from your repo → Railway auto-detects `railway.toml` and deploys the backend
-4. Set environment variables in Railway dashboard:
-   - `OPENAI_API_KEY`, `TAVILY_API_KEY`, `ANTHROPIC_API_KEY` (or your provider keys)
-   - `CORS_ORIGINS` = your frontend URL
-   - `DATABASE_URL` = add a Railway PostgreSQL plugin, or use the SQLite default
-5. For the frontend: deploy on **Vercel** (free, optimal for Next.js):
-   - Import your repo, set root directory to `frontend`
-   - Set `NEXT_PUBLIC_WS_URL` and `NEXT_PUBLIC_API_URL` to your Railway backend URL
+1. Go to [railway.app](https://railway.app) and create a new project
+2. Click **"Add a Service"** → **"GitHub Repo"**
+3. If prompted, install the Railway GitHub App (see below)
+4. Select `singhharsheet8-cloud/people-discovery-agent`
+5. Railway auto-detects `railway.toml` and builds the backend Dockerfile
+6. Go to **Variables** tab and add:
+   - `OPENAI_API_KEY`
+   - `TAVILY_API_KEY`
+   - `PLANNING_MODEL=gpt-5-mini`
+   - `SYNTHESIS_MODEL=gpt-5-mini`
+   - `CORS_ORIGINS=https://your-frontend.vercel.app`
+   - `GITHUB_TOKEN` (optional)
+7. Go to **Settings** → **Networking** → **Generate Domain** to get a public URL
 
-### Docker Compose (local)
+### Frontend → Vercel
+
+1. Go to [vercel.com](https://vercel.com) and import the GitHub repo
+2. Set **Root Directory** to `frontend`
+3. Add environment variables:
+   - `NEXT_PUBLIC_WS_URL=wss://your-railway-domain.up.railway.app`
+   - `NEXT_PUBLIC_API_URL=https://your-railway-domain.up.railway.app`
+4. Deploy — Vercel auto-builds the Next.js app
+
+### Installing the Railway GitHub App
+
+Railway needs the GitHub App to auto-deploy from your repo:
+
+1. Go to [railway.app/new](https://railway.app/new)
+2. Click **"Deploy from GitHub Repo"**
+3. Click **"Configure GitHub App"** when prompted
+4. Select your GitHub account (`singhharsheet8-cloud`)
+5. Choose **"Only select repositories"** → pick `people-discovery-agent`
+6. Click **Install & Authorize**
+7. Return to Railway and select the repo
+
+After installation, Railway auto-deploys on every `git push` to `main`.
+
+### Docker Compose (local alternative)
 
 ```bash
 cp backend/.env.example backend/.env
-# Fill in API keys
+# Edit with your API keys
 
 docker compose up --build
-# Backend: http://localhost:8000
-# Frontend: http://localhost:3000
+# Backend: http://localhost:8000 | Frontend: http://localhost:3000
 ```
+
+---
+
+## Confidence Scoring Algorithm
+
+The confidence score (0–100%) is computed from four weighted, measurable signals — not an LLM-generated number:
+
+| Factor | Weight | What it measures |
+|--------|--------|-----------------|
+| Identity Consistency | 30% | Single clear match vs. multiple ambiguous people |
+| Source Diversity | 20% | Found on 2+ platforms (LinkedIn + YouTube + news) |
+| Information Richness | 20% | How many profile fields are filled (role, company, education, etc.) |
+| Cross-Reference Match | 30% | Details corroborate across independent sources |
+
+If confidence < 65%, the agent asks for clarification (up to 3 rounds before forcing synthesis with available data).
+
+---
 
 ## Data Persistence
 
-### Database Schema
-
 | Table | Purpose |
 |-------|---------|
-| `discovery_sessions` | Tracks every discovery request (status, query, profile, timestamps) |
+| `discovery_sessions` | Every discovery request with status, query, profile, timestamps |
 | `person_profiles` | Searchable archive of all discovered profiles |
 | `search_cache` | TTL-based cache keyed by SHA-256(query + search_type) |
 
-### Caching Strategy
-
-Search results are cached with a configurable TTL (default: 1 hour). Matching queries return cached results instantly, saving API costs and latency. Configure via `CACHE_TTL_SECONDS` in `.env`.
-
-### Upgrading to PostgreSQL
+**Upgrading to PostgreSQL:**
 
 ```bash
-# Install the driver
 pip install asyncpg
-
-# Update .env
-DATABASE_URL=postgresql+asyncpg://user:password@host:5432/discovery_db
+# In .env:
+DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/discovery_db
 ```
+
+---
 
 ## Design Decisions
 
 1. **LangGraph over LangChain agents** — Explicit state machine gives full control over the clarification loop. ReAct-style agents can't reliably pause for human input and resume with preserved state.
 
-2. **Multi-provider LLM strategy** — Planning/tool-calling steps (3-5x per query) use cheap, fast models via OpenAI-compatible APIs. The single synthesis step uses a premium model. Swapping providers requires changing one env var, not code.
+2. **Multi-provider LLM strategy** — Planning/tool-calling steps (3-5x per query) use cheap, fast models. The single synthesis step can use a premium model. Switching providers requires changing one env var, not code.
 
-3. **Tavily over raw Google Search** — Returns parsed, clean content (not just URLs), eliminating separate scraping. The free tier (1000/month) covers POC usage.
+3. **Tavily over raw Google Search** — Returns parsed, clean content (not just URLs), eliminating the need for separate scraping. The free tier (1000/month) is sufficient for POC usage.
 
-4. **WebSocket over polling** — Real-time streaming gives immediate feedback as the agent progresses through each step (10-30s total).
+4. **WebSocket over polling** — Real-time streaming provides immediate feedback as the agent progresses through each step (typically 30-90s total).
 
 5. **Multi-factor confidence scoring** — Computed from measurable signals (source count, platform diversity, information completeness, cross-referencing) rather than an unreliable single LLM-generated number.
 
-6. **SQLite + DB cache over Redis** — Zero-config persistence for POC. Both upgradeable to PostgreSQL/Redis with a single env var change.
+6. **SQLite + DB cache over Redis** — Zero-config persistence for POC. Upgradeable to PostgreSQL/Redis with a single env var change. No external infrastructure needed to get started.
+
+7. **Cross-platform SSL fix** — `truststore` (OS native cert store) with `certifi` fallback ensures the app works on macOS, Linux, and Windows without manual certificate configuration.
+
+---
 
 ## License
 
