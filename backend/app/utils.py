@@ -23,7 +23,7 @@ def async_retry(max_retries: int = 2, base_delay: float = 1.0, max_delay: float 
                     last_error = e
                     error_str = str(e).lower()
 
-                    non_retryable = ("auth", "invalid", "not found", "permission", "api key")
+                    non_retryable = ("auth", "invalid", "not found", "permission", "api key", "rate limit", "rate_limit", "429")
                     if any(term in error_str for term in non_retryable):
                         raise
 
