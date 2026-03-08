@@ -22,16 +22,35 @@ export function SearchProgress({ currentStep, isActive }: SearchProgressProps) {
 
   const currentIdx = STEPS.findIndex((s) => s.key === currentStep);
 
+  const filteredSteps = STEPS.filter((s) => s.key !== "ask_clarification" || currentStep === "ask_clarification");
+
   return (
     <div className="glass rounded-xl p-4 animate-fade-in">
-      <div className="flex items-center gap-2 mb-3">
-        <Loader2 className={cn("w-4 h-4 text-brand-400", isActive && "animate-spin")} />
-        <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">
-          Discovery Progress
-        </span>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Loader2 className={cn("w-4 h-4 text-brand-400", isActive && "animate-spin")} />
+          <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+            Discovery Progress
+          </span>
+        </div>
+        {isActive && currentIdx >= 0 && (
+          <span className="text-[10px] font-mono text-gray-500">
+            {currentIdx + 1}/{filteredSteps.length}
+          </span>
+        )}
       </div>
+      {isActive && currentIdx >= 0 && (
+        <div className="h-1 bg-white/5 rounded-full mb-4 overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-brand-500 to-purple-500 rounded-full transition-all duration-700 ease-out"
+            style={{
+              width: `${Math.min(100, ((currentIdx + 1) / filteredSteps.length) * 100)}%`,
+            }}
+          />
+        </div>
+      )}
       <div className="space-y-2">
-        {STEPS.filter((s) => s.key !== "ask_clarification" || currentStep === "ask_clarification").map((step, idx) => {
+        {filteredSteps.map((step, idx) => {
           const StepIcon = step.icon;
           const isComplete = currentIdx > idx || (!isActive && currentStep === "complete");
           const isCurrent = step.key === currentStep && isActive;

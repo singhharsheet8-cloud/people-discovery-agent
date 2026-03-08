@@ -61,13 +61,12 @@ export function ChatInterface({
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {!hasStarted && (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center mb-4">
-              <User size={28} className="text-white" />
+            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 flex items-center justify-center mb-6 shadow-2xl shadow-brand-500/20 animate-scale-in">
+              <User size={32} className="text-white" />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">People Discovery Agent</h2>
-            <p className="text-gray-400 text-sm max-w-md mb-6">
-              Tell me about someone you want to find. I&apos;ll search across LinkedIn, YouTube,
-              news articles, and the web to build a comprehensive profile.
+            <h2 className="text-2xl font-bold gradient-text mb-3 animate-fade-in">People Discovery Agent</h2>
+            <p className="text-gray-400 text-sm max-w-lg mb-8 animate-fade-in leading-relaxed">
+              Enter a name, role, or description. I&apos;ll search LinkedIn, GitHub, YouTube, news sources, and the web to build a verified profile with confidence scoring.
             </p>
             <div className="flex flex-wrap gap-2 justify-center">
               {[

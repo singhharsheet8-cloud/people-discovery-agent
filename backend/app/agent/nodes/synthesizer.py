@@ -3,34 +3,43 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.config import get_settings, get_synthesis_llm
 from app.agent.state import AgentState
+from app.utils import async_retry
 
 logger = logging.getLogger(__name__)
 
-SYNTHESIZER_SYSTEM_PROMPT = """You are a professional research analyst creating a comprehensive person profile.
-Synthesize all available information into a well-structured, accurate profile.
 
-Rules:
-- Only include information supported by the sources
-- Do not fabricate or assume facts
-- Note the confidence level for each piece of information
-- Prioritize accuracy over completeness
-- Include source references
+@async_retry(max_retries=2)
+async def _invoke_synthesizer(llm, messages):
+    return await llm.ainvoke(messages)
+
+SYNTHESIZER_SYSTEM_PROMPT = """You are an elite research analyst creating a comprehensive person profile.
+Synthesize ALL available information into an accurate, detailed, well-structured profile.
+
+INSTRUCTIONS:
+1. Cross-reference facts across multiple sources for accuracy
+2. Prioritize recent information over older data
+3. Extract ALL available details — roles, companies, education, achievements, publications, talks
+4. Include direct URLs when available (LinkedIn, GitHub, Twitter, YouTube channels)
+5. Write a compelling bio that captures the person's professional identity
+6. For sources, include a brief relevant excerpt as the snippet
+7. Do NOT fabricate information — only use what is supported by the sources
+8. Fill in EVERY field possible from the available data
 
 Respond with valid JSON matching this schema:
 {
-  "name": "Full Name",
-  "current_role": "Current Job Title",
-  "company": "Current Company",
-  "location": "City, Country",
-  "bio": "2-3 sentence professional summary",
-  "linkedin_url": "URL or null",
-  "key_facts": ["Important fact 1", "Important fact 2"],
-  "education": ["Degree, University"],
-  "expertise": ["Domain 1", "Domain 2"],
-  "notable_work": ["Achievement or project"],
-  "social_links": {"platform": "url"},
+  "name": "Full Legal Name",
+  "current_role": "Current Job Title (be specific)",
+  "company": "Current Company/Organization",
+  "location": "City, State/Country",
+  "bio": "3-4 sentence professional summary capturing who they are, their impact, and what they're known for",
+  "linkedin_url": "Direct LinkedIn profile URL or null",
+  "key_facts": ["5-8 important facts about this person, ordered by significance"],
+  "education": ["Degree in Field, University (Year if known)"],
+  "expertise": ["Specific domain expertise areas (5-10 items)"],
+  "notable_work": ["Significant achievements, publications, projects, or companies founded"],
+  "social_links": {"linkedin": "url", "twitter": "url", "github": "url"},
   "sources": [
-    {"title": "Source title", "url": "URL", "platform": "linkedin|youtube|web|news", "snippet": "Relevant excerpt", "relevance_score": 0.9}
+    {"title": "Source title", "url": "URL", "platform": "linkedin|youtube|github|twitter|news|web", "snippet": "Key information found here", "relevance_score": 0.0-1.0}
   ]
 }"""
 
@@ -66,7 +75,7 @@ Sources ({len(sources_text)} total):
 
 Synthesize the most accurate and complete profile from these sources. Fill in every field you can."""
 
-    response = await llm.ainvoke([
+    response = await _invoke_synthesizer(llm, [
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ])

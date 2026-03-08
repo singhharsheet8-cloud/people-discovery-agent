@@ -1,10 +1,12 @@
+import time
 import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.graph import graph
-from app.db import get_db
+from app.config import get_settings
+from app.db import get_db, get_session_factory
 from app.models.db_models import DiscoverySession, PersonProfileRecord
 from app.cache import cleanup_expired_cache
 
@@ -155,4 +157,26 @@ async def cleanup_cache():
 
 @router.get("/health")
 async def health():
-    return {"status": "healthy", "version": "1.0.0"}
+    """Health check with dependency status for monitoring."""
+    checks: dict = {"status": "healthy", "version": "1.0.0", "timestamp": time.time()}
+
+    # Database check
+    try:
+        factory = get_session_factory()
+        async with factory() as db:
+            await db.execute(select(DiscoverySession).limit(1))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {type(e).__name__}"
+        checks["status"] = "degraded"
+
+    # LLM provider check (just verify key presence)
+    settings = get_settings()
+    checks["llm_planning"] = "configured" if (settings.openai_api_key or settings.groq_api_key) else "missing_key"
+    checks["llm_synthesis"] = "configured" if (settings.openai_api_key or settings.anthropic_api_key) else "missing_key"
+    checks["search_tavily"] = "configured" if settings.tavily_api_key else "missing_key"
+
+    if checks["llm_planning"] == "missing_key" or checks["search_tavily"] == "missing_key":
+        checks["status"] = "degraded"
+
+    return checks

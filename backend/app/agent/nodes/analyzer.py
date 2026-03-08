@@ -3,17 +3,25 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.config import get_settings, get_planning_llm
 from app.agent.state import AgentState
+from app.utils import async_retry
 
 logger = logging.getLogger(__name__)
 
-ANALYZER_SYSTEM_PROMPT = """You are a research analyst specializing in person identification.
-Given search results about a person, analyze and cross-reference them to build a coherent picture.
 
-Your job:
-1. Identify which results refer to the SAME person vs different people with similar names
-2. Extract key facts: name, role, company, location, education, expertise
-3. Note any contradictions or ambiguities
-4. Assess how much we know vs what's still missing
+@async_retry(max_retries=2)
+async def _invoke_analyzer(llm, messages):
+    return await llm.ainvoke(messages)
+
+ANALYZER_SYSTEM_PROMPT = """You are an expert research analyst specializing in person identification and disambiguation.
+
+Given search results about a person, perform rigorous cross-referencing:
+
+1. DISAMBIGUATE: Determine which results refer to the SAME person vs namesakes
+2. EXTRACT: Pull out every available detail — name, role, company, location, education, expertise, achievements
+3. CROSS-REFERENCE: Note when multiple sources confirm the same fact (increases confidence)
+4. IDENTIFY GAPS: What critical info is still missing?
+
+Key signals for matching: same company, same role, consistent location, mutual connections, consistent expertise area.
 
 Respond with valid JSON only:
 {
@@ -21,20 +29,20 @@ Respond with valid JSON only:
     {
       "name": "Full Name",
       "confidence": 0.0-1.0,
-      "role": "...",
-      "company": "...",
-      "location": "...",
-      "bio_summary": "...",
-      "education": ["..."],
-      "expertise": ["..."],
-      "notable_work": ["..."],
-      "social_links": {"linkedin": "url", "twitter": "url"},
+      "role": "Current role",
+      "company": "Current company",
+      "location": "City, Country",
+      "bio_summary": "2-3 sentences about this person",
+      "education": ["Degree, University"],
+      "expertise": ["Area 1", "Area 2"],
+      "notable_work": ["Achievement 1"],
+      "social_links": {"linkedin": "url", "twitter": "url", "github": "url"},
       "supporting_sources": [0, 1, 3],
-      "key_facts": ["fact1", "fact2"]
+      "key_facts": ["fact confirmed by sources"]
     }
   ],
-  "ambiguities": ["description of ambiguity"],
-  "missing_info": ["what we still don't know"],
+  "ambiguities": ["description of any ambiguity"],
+  "missing_info": ["what we still need"],
   "best_match_index": 0
 }"""
 
@@ -63,7 +71,7 @@ Search results ({len(results_summary)} total):
 
 Analyze these results and identify the person(s) they refer to."""
 
-    response = await llm.ainvoke([
+    response = await _invoke_analyzer(llm, [
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ])

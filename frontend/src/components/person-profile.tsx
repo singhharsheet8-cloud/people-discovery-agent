@@ -32,7 +32,7 @@ export function PersonProfile({ profile }: PersonProfileProps) {
       <div className="bg-gradient-to-r from-brand-600/20 to-purple-600/20 p-6">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-brand-400 to-purple-500 flex items-center justify-center text-2xl font-bold text-white">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg shadow-brand-500/20 animate-scale-in">
               {initials}
             </div>
             <div>

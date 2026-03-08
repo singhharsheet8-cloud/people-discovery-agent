@@ -30,6 +30,7 @@ from app.config import get_settings
 from app.db import init_db, close_db
 from app.api.routes import router
 from app.api.websocket import websocket_endpoint
+from app.middleware import RateLimitMiddleware, RequestIDMiddleware
 
 settings = get_settings()
 
@@ -60,6 +61,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=60, ws_per_minute=20)
 
 app.include_router(router)
 app.websocket("/api/ws/{session_id}")(websocket_endpoint)

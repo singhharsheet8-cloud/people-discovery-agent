@@ -3,8 +3,14 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.config import get_settings, get_planning_llm
 from app.agent.state import AgentState
+from app.utils import async_retry
 
 logger = logging.getLogger(__name__)
+
+
+@async_retry(max_retries=2)
+async def _invoke_planner(llm, messages):
+    return await llm.ainvoke(messages)
 
 PLANNER_SYSTEM_PROMPT = """You are a search query planner for a people discovery system.
 Given information about a person, generate exactly 3-4 targeted search queries.
@@ -50,7 +56,7 @@ Clarification round: {state.get("clarification_count", 0)}
 
 Generate targeted search queries. {"Focus on narrower queries using the new clarification information. Avoid re-searching platforms that already returned good results." if state.get("clarification_count", 0) > 0 else "Cast a wide net across multiple platforms."}"""
 
-    response = await llm.ainvoke([
+    response = await _invoke_planner(llm, [
         SystemMessage(content=PLANNER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ])

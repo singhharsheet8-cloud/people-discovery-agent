@@ -6,6 +6,7 @@ import { ChatInterface } from "@/components/chat-interface";
 import { PersonProfile } from "@/components/person-profile";
 import { SearchProgress } from "@/components/search-progress";
 import { SessionHistory } from "@/components/session-history";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { Zap, PanelLeftClose, PanelLeft } from "lucide-react";
 
 export default function Home() {
@@ -42,6 +43,7 @@ export default function Home() {
   })();
 
   return (
+    <ErrorBoundary>
     <div className="h-screen flex flex-col">
       {/* Header */}
       <header className="border-b border-white/10 px-4 py-3 flex items-center justify-between shrink-0">
@@ -106,5 +108,6 @@ export default function Home() {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }
