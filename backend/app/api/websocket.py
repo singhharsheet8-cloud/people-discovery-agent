@@ -25,6 +25,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
     await websocket.accept()
     if not session_id:
         session_id = str(uuid.uuid4())
+    elif len(session_id) > 128:
+        await websocket.send_json({"type": "error", "message": "Invalid session ID"})
+        await websocket.close()
+        return
 
     await websocket.send_json({"type": "connected", "session_id": session_id})
     logger.info(f"WebSocket connected: {session_id}")
@@ -32,7 +36,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
     try:
         while True:
             try:
-                data = await websocket.receive_json()
+                raw = await websocket.receive_text()
+                if len(raw) > 65536:
+                    await websocket.send_json({"type": "error", "message": "Message too large"})
+                    continue
+                data = json.loads(raw)
             except json.JSONDecodeError:
                 await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                 continue
@@ -40,13 +48,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
             msg_type = data.get("type", "")
 
             if msg_type == "query":
-                text = (data.get("text") or "").strip()
+                text = (data.get("text") or "").strip()[:2000]
                 if not text:
                     await websocket.send_json({"type": "error", "message": "Query cannot be empty"})
                     continue
                 await _run_discovery(websocket, session_id, query=text)
             elif msg_type == "clarification_response":
-                text = (data.get("text") or "").strip()
+                text = (data.get("text") or "").strip()[:2000]
                 if not text:
                     await websocket.send_json({"type": "error", "message": "Response cannot be empty"})
                     continue
@@ -59,7 +67,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
     except Exception as e:
         logger.exception(f"WebSocket error for {session_id}: {e}")
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({"type": "error", "message": "An unexpected error occurred. Please try again."})
         except Exception:
             pass
 
@@ -228,4 +236,4 @@ async def _run_discovery(
     except Exception as e:
         logger.exception(f"Discovery error: {e}")
         await _update_db_session(session_id, status="error")
-        await websocket.send_json({"type": "error", "message": f"Discovery failed: {str(e)}"})
+        await websocket.send_json({"type": "error", "message": "Discovery failed. Please try again with a more specific query."})

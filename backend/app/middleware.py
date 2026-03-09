@@ -17,12 +17,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.rpm = requests_per_minute
         self.ws_rpm = ws_per_minute
         self._requests: dict[str, list[float]] = defaultdict(list)
+        self._trusted_proxies: set[str] = {"127.0.0.1", "::1", "10.0.0.0/8"}
 
     def _get_client_ip(self, request: Request) -> str:
+        client_host = request.client.host if request.client else "unknown"
         forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
+        if forwarded and client_host in self._trusted_proxies:
             return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return client_host
 
     def _is_rate_limited(self, client_ip: str, limit: int) -> bool:
         now = time.time()

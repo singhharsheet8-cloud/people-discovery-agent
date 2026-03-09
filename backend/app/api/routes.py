@@ -1,7 +1,7 @@
 import time
 import uuid
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.graph import graph
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api")
 
 
 class DiscoverRequest(BaseModel):
-    query: str
+    query: str = Field(..., min_length=2, max_length=2000)
 
 
 class DiscoverResponse(BaseModel):
@@ -59,7 +59,7 @@ async def start_discovery(request: DiscoverRequest, db: AsyncSession = Depends(g
 
 
 @router.get("/sessions", response_model=list[SessionSummary])
-async def list_sessions(limit: int = 20, db: AsyncSession = Depends(get_db)):
+async def list_sessions(limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):
     stmt = (
         select(DiscoverySession)
         .order_by(DiscoverySession.created_at.desc())
@@ -125,11 +125,12 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/profiles/search")
-async def search_profiles(name: str, db: AsyncSession = Depends(get_db)):
+async def search_profiles(name: str = Query(..., min_length=1, max_length=255), db: AsyncSession = Depends(get_db)):
     """Search previously discovered profiles by name."""
+    safe_name = name.replace("%", r"\%").replace("_", r"\_")
     stmt = (
         select(PersonProfileRecord)
-        .where(PersonProfileRecord.name.ilike(f"%{name}%"))
+        .where(PersonProfileRecord.name.ilike(f"%{safe_name}%"))
         .order_by(PersonProfileRecord.created_at.desc())
         .limit(10)
     )
@@ -160,23 +161,19 @@ async def health():
     """Health check with dependency status for monitoring."""
     checks: dict = {"status": "healthy", "version": "1.0.0", "timestamp": time.time()}
 
-    # Database check
     try:
         factory = get_session_factory()
         async with factory() as db:
             await db.execute(select(DiscoverySession).limit(1))
         checks["database"] = "ok"
-    except Exception as e:
-        checks["database"] = f"error: {type(e).__name__}"
+    except Exception:
+        checks["database"] = "error"
         checks["status"] = "degraded"
 
-    # LLM provider check (just verify key presence)
     settings = get_settings()
-    checks["llm_planning"] = "configured" if (settings.openai_api_key or settings.groq_api_key) else "missing_key"
-    checks["llm_synthesis"] = "configured" if (settings.openai_api_key or settings.anthropic_api_key) else "missing_key"
-    checks["search_tavily"] = "configured" if settings.tavily_api_key else "missing_key"
-
-    if checks["llm_planning"] == "missing_key" or checks["search_tavily"] == "missing_key":
+    checks["services"] = "ok"
+    if not (settings.openai_api_key or settings.groq_api_key) or not settings.tavily_api_key:
+        checks["services"] = "degraded"
         checks["status"] = "degraded"
 
     return checks
