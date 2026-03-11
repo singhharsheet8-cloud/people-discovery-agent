@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     confidence_threshold: float = 0.75
-    max_clarifications: int = 2
+    max_clarifications: int = 5
     max_search_queries: int = 6
 
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
