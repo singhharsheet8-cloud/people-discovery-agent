@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "People Discovery Agent",
-  description: "AI-powered person discovery with multi-source search and confidence scoring",
+  title: "People Discovery Platform",
+  description: "API-first deep person intelligence platform",
   icons: { icon: "/favicon.ico" },
 };
 

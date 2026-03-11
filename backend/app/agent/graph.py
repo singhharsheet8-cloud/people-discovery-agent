@@ -1,47 +1,13 @@
 import logging
-import threading
-from collections import OrderedDict
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from app.agent.state import AgentState
 from app.agent.nodes.planner import plan_searches
 from app.agent.nodes.searcher import execute_searches
 from app.agent.nodes.analyzer import analyze_results
-from app.agent.nodes.confidence import check_confidence
-from app.agent.nodes.clarifier import ask_clarification
+from app.agent.nodes.enricher import enrich_data
 from app.agent.nodes.synthesizer import synthesize_profile
-from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-
-def _route_after_confidence(state: AgentState) -> str:
-    settings = get_settings()
-    confidence = state.get("confidence_score", 0)
-    clarification_count = state.get("clarification_count", 0)
-    results_count = len(state.get("search_results", []))
-
-    if clarification_count >= settings.max_clarifications:
-        logger.info(f"Max clarifications ({settings.max_clarifications}) reached, synthesizing with best data")
-        return "synthesize"
-
-    if confidence >= settings.confidence_threshold:
-        logger.info(f"Confidence {confidence:.3f} >= {settings.confidence_threshold}, synthesizing directly")
-        return "synthesize"
-
-    if results_count == 0:
-        logger.info(f"No results found, asking for clarification")
-        return "clarify"
-
-    if clarification_count < settings.max_clarifications:
-        logger.info(
-            f"Confidence {confidence:.3f} < {settings.confidence_threshold} — "
-            f"asking clarification (round {clarification_count + 1}/{settings.max_clarifications})"
-        )
-        return "clarify"
-
-    logger.info(f"Synthesizing with confidence {confidence:.3f}")
-    return "synthesize"
 
 
 def build_graph() -> StateGraph:
@@ -50,49 +16,17 @@ def build_graph() -> StateGraph:
     builder.add_node("plan_searches", plan_searches)
     builder.add_node("execute_searches", execute_searches)
     builder.add_node("analyze_results", analyze_results)
-    builder.add_node("check_confidence", check_confidence)
-    builder.add_node("ask_clarification", ask_clarification)
+    builder.add_node("enrich_data", enrich_data)
     builder.add_node("synthesize_profile", synthesize_profile)
 
     builder.add_edge(START, "plan_searches")
     builder.add_edge("plan_searches", "execute_searches")
     builder.add_edge("execute_searches", "analyze_results")
-    builder.add_edge("analyze_results", "check_confidence")
-
-    builder.add_conditional_edges(
-        "check_confidence",
-        _route_after_confidence,
-        {
-            "clarify": "ask_clarification",
-            "synthesize": "synthesize_profile",
-        },
-    )
-
-    builder.add_edge("ask_clarification", "plan_searches")
+    builder.add_edge("analyze_results", "enrich_data")
+    builder.add_edge("enrich_data", "synthesize_profile")
     builder.add_edge("synthesize_profile", END)
 
     return builder
 
 
-class BoundedMemorySaver(MemorySaver):
-    """MemorySaver that evicts oldest sessions when capacity is exceeded."""
-
-    def __init__(self, max_sessions: int = 200):
-        super().__init__()
-        self._max = max_sessions
-        self._access_order: OrderedDict[str, None] = OrderedDict()
-        self._lock = threading.Lock()
-
-    def put(self, config, checkpoint, metadata, new_versions):
-        thread_id = config.get("configurable", {}).get("thread_id", "")
-        with self._lock:
-            self._access_order.pop(thread_id, None)
-            self._access_order[thread_id] = None
-            while len(self._access_order) > self._max:
-                evicted, _ = self._access_order.popitem(last=False)
-                self.storage.pop(evicted, None)
-        return super().put(config, checkpoint, metadata, new_versions)
-
-
-checkpointer = BoundedMemorySaver(max_sessions=200)
-graph = build_graph().compile(checkpointer=checkpointer)
+graph = build_graph().compile()

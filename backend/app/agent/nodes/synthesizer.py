@@ -1,7 +1,7 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_settings, get_synthesis_llm
+from app.config import get_synthesis_llm
 from app.agent.state import AgentState
 from app.utils import async_retry
 
@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 @async_retry(max_retries=2)
 async def _invoke_synthesizer(llm, messages):
     return await llm.ainvoke(messages)
+
 
 SYNTHESIZER_SYSTEM_PROMPT = """You are an elite research analyst creating a comprehensive person profile.
 Synthesize ALL available information into an accurate, detailed, well-structured profile.
@@ -37,6 +38,8 @@ Respond with valid JSON matching this schema:
   "education": ["Degree in Field, University (Year if known)"],
   "expertise": ["Specific domain expertise areas (5-10 items)"],
   "notable_work": ["Significant achievements, publications, projects, or companies founded"],
+  "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],
+  "reputation_score": 0.0,
   "social_links": {"linkedin": "url", "twitter": "url", "github": "url"},
   "sources": [
     {"title": "Source title", "url": "URL", "platform": "linkedin|youtube|github|twitter|news|web", "snippet": "Key information found here", "relevance_score": 0.0-1.0}
@@ -44,12 +47,29 @@ Respond with valid JSON matching this schema:
 }"""
 
 
-async def synthesize_profile(state: AgentState) -> dict:
-    settings = get_settings()
-    llm = get_synthesis_llm()
+def _format_input_for_prompt(input_data: dict) -> str:
+    """Format DiscoveryInput for the synthesizer prompt."""
+    parts = []
+    if input_data.get("name"):
+        parts.append(f"Name: {input_data['name']}")
+    if input_data.get("company"):
+        parts.append(f"Company: {input_data['company']}")
+    if input_data.get("role"):
+        parts.append(f"Role: {input_data['role']}")
+    if input_data.get("location"):
+        parts.append(f"Location: {input_data['location']}")
+    if input_data.get("context"):
+        parts.append(f"Context: {input_data['context']}")
+    return "\n".join(parts) if parts else "Unknown"
 
+
+async def synthesize_profile(state: AgentState) -> dict:
+    llm = get_synthesis_llm()
+    input_data = state.get("input", {})
     analysis = state.get("analyzed_results", {})
     results = state.get("search_results", [])
+    enrichment = state.get("enrichment", {})
+
     people = analysis.get("identified_people", [])
     best_idx = analysis.get("best_match_index", 0)
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
@@ -66,14 +86,22 @@ async def synthesize_profile(state: AgentState) -> dict:
     if best_idx >= 0 and people:
         analysis_text = f"Pre-analysis:\n{json.dumps(people[best_idx], indent=2)}"
 
-    user_prompt = f"""Create a comprehensive profile for: {state["person_query"]}
+    career_timeline_str = ""
+    timeline = enrichment.get("career_timeline", [])
+    if timeline:
+        career_timeline_str = f"\nCareer timeline (from enrichment):\n{json.dumps(timeline, indent=2)}"
+
+    input_str = _format_input_for_prompt(input_data)
+
+    user_prompt = f"""Create a comprehensive profile for: {input_str}
 
 {analysis_text}
+{career_timeline_str}
 
 Sources ({len(sources_text)} total):
 {chr(10).join(sources_text[:15])}
 
-Synthesize the most accurate and complete profile from these sources. Fill in every field you can."""
+Synthesize the most accurate and complete profile from these sources. Fill in every field you can. Include career_timeline and reputation_score (0.0-1.0 based on source diversity and cross-referencing)."""
 
     response = await _invoke_synthesizer(llm, [
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
@@ -95,6 +123,12 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
 
     profile["confidence_score"] = state.get("confidence_score", 0)
 
+    if "reputation_score" not in profile:
+        profile["reputation_score"] = enrichment.get("source_diversity", 0.5)
+
+    if "career_timeline" not in profile and timeline:
+        profile["career_timeline"] = timeline
+
     logger.info(f"Synthesized profile for: {profile.get('name', 'Unknown')}")
 
     return {
@@ -106,8 +140,11 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
 def _build_fallback_profile(state: AgentState, analysis: dict) -> dict:
     people = analysis.get("identified_people", [])
     best = people[0] if people else {}
+    input_data = state.get("input", {})
+    enrichment = state.get("enrichment", {})
+
     return {
-        "name": best.get("name", state.get("person_query", "Unknown")),
+        "name": best.get("name", input_data.get("name", "Unknown")),
         "current_role": best.get("role"),
         "company": best.get("company"),
         "location": best.get("location"),
@@ -116,6 +153,8 @@ def _build_fallback_profile(state: AgentState, analysis: dict) -> dict:
         "education": best.get("education", []),
         "expertise": best.get("expertise", []),
         "notable_work": best.get("notable_work", []),
+        "career_timeline": enrichment.get("career_timeline", []),
+        "reputation_score": enrichment.get("source_diversity", 0.5),
         "social_links": best.get("social_links", {}),
         "sources": [],
     }

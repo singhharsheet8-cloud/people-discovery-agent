@@ -1,13 +1,34 @@
 "use client";
 
-import { MapPin, Briefcase, Building2, ExternalLink, GraduationCap, Lightbulb, Trophy } from "lucide-react";
+import {
+  MapPin,
+  Building2,
+  Briefcase,
+  ExternalLink,
+  GraduationCap,
+  Lightbulb,
+  Trophy,
+  Linkedin,
+  Twitter,
+  Github,
+  Globe,
+} from "lucide-react";
 import type { PersonProfile as ProfileType } from "@/lib/types";
-import { ConfidenceScore } from "./confidence-score";
-import { SourceCard } from "./source-card";
+import { confidenceLabel, confidenceColor } from "@/lib/utils";
+import { SourceTabs } from "./source-tabs";
 
 interface PersonProfileProps {
   profile: ProfileType;
 }
+
+const SOCIAL_ICONS: Record<string, React.ElementType> = {
+  linkedin: Linkedin,
+  twitter: Twitter,
+  github: Github,
+  x: Twitter,
+  website: Globe,
+  web: Globe,
+};
 
 export function PersonProfile({ profile }: PersonProfileProps) {
   const name = profile.name || "Unknown";
@@ -26,13 +47,17 @@ export function PersonProfile({ profile }: PersonProfileProps) {
     .slice(0, 2)
     .toUpperCase() || "?";
 
+  const confidencePct = Math.round((profile.confidence_score ?? 0) * 100);
+  const confidenceLabelText = confidenceLabel(profile.confidence_score ?? 0);
+  const confidenceColorClass = confidenceColor(profile.confidence_score ?? 0);
+
   return (
-    <div className="glass rounded-2xl overflow-hidden animate-slide-up">
+    <div className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden animate-slide-up">
       {/* Header */}
-      <div className="bg-gradient-to-r from-brand-600/20 to-purple-600/20 p-6">
-        <div className="flex items-start justify-between">
+      <div className="bg-gradient-to-br from-brand-600/20 via-purple-600/10 to-transparent p-6">
+        <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-400 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg shadow-brand-500/20 animate-scale-in">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg">
               {initials}
             </div>
             <div>
@@ -57,7 +82,16 @@ export function PersonProfile({ profile }: PersonProfileProps) {
               )}
             </div>
           </div>
-          <ConfidenceScore score={profile.confidence_score} size="lg" />
+          <div className="flex flex-col items-end gap-1.5 shrink-0">
+            <div
+              className={`px-3 py-1.5 rounded-lg text-sm font-bold ${confidenceColorClass} bg-white/5`}
+            >
+              {confidencePct}%
+            </div>
+            <span className={`text-xs font-medium ${confidenceColorClass}`}>
+              {confidenceLabelText}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -105,7 +139,9 @@ export function PersonProfile({ profile }: PersonProfileProps) {
           <Section title="Education" icon={GraduationCap}>
             <ul className="space-y-1">
               {education.map((edu, i) => (
-                <li key={i} className="text-sm text-gray-300">{edu}</li>
+                <li key={i} className="text-sm text-gray-300">
+                  {edu}
+                </li>
               ))}
             </ul>
           </Section>
@@ -116,7 +152,9 @@ export function PersonProfile({ profile }: PersonProfileProps) {
           <Section title="Notable Work" icon={Trophy}>
             <ul className="space-y-1">
               {notableWork.map((work, i) => (
-                <li key={i} className="text-sm text-gray-300">{work}</li>
+                <li key={i} className="text-sm text-gray-300">
+                  {work}
+                </li>
               ))}
             </ul>
           </Section>
@@ -124,19 +162,28 @@ export function PersonProfile({ profile }: PersonProfileProps) {
 
         {/* Social Links */}
         {Object.keys(socialLinks).length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(socialLinks).map(([platform, url]) => (
-              <a
-                key={platform}
-                href={typeof url === "string" ? url : "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium glass glass-hover text-gray-300"
-              >
-                {platform}
-                <ExternalLink size={10} />
-              </a>
-            ))}
+          <div>
+            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+              Social Links
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(socialLinks).map(([platform, url]) => {
+                const Icon = SOCIAL_ICONS[platform.toLowerCase()] ?? Globe;
+                return (
+                  <a
+                    key={platform}
+                    href={typeof url === "string" ? url : "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/5 transition-colors"
+                  >
+                    <Icon size={16} />
+                    {platform}
+                    <ExternalLink size={12} />
+                  </a>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -146,11 +193,7 @@ export function PersonProfile({ profile }: PersonProfileProps) {
             <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">
               Sources ({sources.length})
             </h3>
-            <div className="space-y-2">
-              {sources.map((source, i) => (
-                <SourceCard key={i} source={source} />
-              ))}
-            </div>
+            <SourceTabs sources={sources} />
           </div>
         )}
       </div>

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -11,26 +12,44 @@ class Settings(BaseSettings):
     youtube_api_key: str = ""
     github_token: str = ""
 
+    # Additional API keys for discovery sources
+    apify_api_key: str = ""
+    firecrawl_api_key: str = ""
+    serpapi_api_key: str = ""
+    sociavault_api_key: str = ""
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+
+    # Admin defaults
+    admin_email: str = "admin@discovery.local"
+    admin_password: str = "changeme123"
+
     # Planning/analysis LLM — non-reasoning model, fast JSON output
     planning_model: str = "gpt-4.1-mini"
     planning_base_url: str = ""  # Override for Groq/Together AI
 
     # Synthesis LLM — reasoning model for richer profiles
-    synthesis_model: str = "gpt-5-mini"
+    synthesis_model: str = "deepseek-chat"
 
     # Alternative provider API keys (OpenAI-compatible endpoints)
-    groq_api_key: str = ""       # Optional: Groq for ultra-fast inference
-    together_api_key: str = ""   # Optional: Together AI for open-source models
+    groq_api_key: str = ""  # Optional: Groq for ultra-fast inference
+    together_api_key: str = ""  # Optional: Together AI for open-source models
 
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
     confidence_threshold: float = 0.75
-    max_clarifications: int = 5
     max_search_queries: int = 6
 
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
     cache_ttl_seconds: int = 3600
+
+    # Cache TTL per source (seconds)
+    cache_ttl_linkedin: int = 604800  # 7 days
+    cache_ttl_twitter: int = 86400  # 1 day
+    cache_ttl_web: int = 86400  # 24 hours
+    cache_ttl_youtube: int = 2592000  # 30 days
+    cache_ttl_default: int = 86400  # 24 hours
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -95,13 +114,25 @@ def _is_reasoning_model(model: str) -> bool:
 
 
 def get_synthesis_llm():
-    """Build synthesis LLM — Anthropic for Claude, OpenAI for GPT models."""
+    """Build synthesis LLM — DeepSeek, Anthropic Claude, or OpenAI GPT."""
     from langchain_anthropic import ChatAnthropic
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
     model = settings.synthesis_model
 
+    # DeepSeek: OpenAI-compatible API
+    if model.startswith("deepseek") and settings.deepseek_api_key:
+        return ChatOpenAI(
+            model=model,
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+            temperature=0,
+            max_tokens=4096,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+    # Anthropic Claude
     if model.startswith("claude") and settings.anthropic_api_key:
         return ChatAnthropic(
             model=model,
@@ -110,6 +141,7 @@ def get_synthesis_llm():
             max_tokens=4096,
         )
 
+    # OpenAI GPT fallback
     kwargs: dict = {
         "model": model,
         "api_key": settings.openai_api_key,

@@ -51,8 +51,8 @@ export function SourceCard({ source }: SourceCardProps) {
             {source.title}
           </p>
           <p className="text-xs text-gray-500 truncate mt-0.5">{source.url}</p>
-          {source.snippet && (
-            <p className="text-xs text-gray-400 mt-1.5 line-clamp-2">{source.snippet}</p>
+          {source.raw_content && (
+            <p className="text-xs text-gray-400 mt-1.5 line-clamp-2">{source.raw_content}</p>
           )}
         </div>
         <div className="text-xs text-gray-500 shrink-0">

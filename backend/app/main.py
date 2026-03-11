@@ -1,12 +1,8 @@
 import os
 import ssl
 
-def _fix_ssl():
-    """Ensure HTTPS works on any platform (macOS, Linux, Windows).
 
-    macOS Python often ships with outdated OpenSSL and no system certs.
-    truststore uses the native OS cert store; certifi is the fallback.
-    """
+def _fix_ssl():
     try:
         import truststore
         truststore.inject_into_ssl()
@@ -20,6 +16,7 @@ def _fix_ssl():
     except Exception:
         pass
 
+
 _fix_ssl()
 
 import logging
@@ -29,7 +26,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.db import init_db, close_db
 from app.api.routes import router
-from app.api.websocket import websocket_endpoint
+from app.api.webhooks import router as webhooks_router
+from app.api.api_keys import router as api_keys_router
+from app.api.suggest import router as suggest_router
 from app.middleware import RateLimitMiddleware, RequestIDMiddleware
 
 settings = get_settings()
@@ -61,9 +60,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="People Discovery Agent",
-    description="AI-powered person discovery with multi-source search and confidence scoring",
-    version="1.0.0",
+    title="People Discovery Platform",
+    description="API-first deep person intelligence platform with 12+ source scrapers",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -78,5 +77,6 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=60, ws_per_minute=20)
 
 app.include_router(router)
-app.websocket("/api/ws/{session_id}")(websocket_endpoint)
-app.websocket("/api/ws")(websocket_endpoint)
+app.include_router(webhooks_router)
+app.include_router(api_keys_router)
+app.include_router(suggest_router)

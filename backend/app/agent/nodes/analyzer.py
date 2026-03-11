@@ -1,7 +1,6 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_settings
 from app.agent.state import AgentState
 from app.utils import invoke_llm_with_fallback
 
@@ -42,8 +41,24 @@ Respond with valid JSON only:
 }"""
 
 
+def _format_input_for_prompt(input_data: dict) -> str:
+    """Format DiscoveryInput for the analyzer prompt."""
+    parts = []
+    if input_data.get("name"):
+        parts.append(f"Name: {input_data['name']}")
+    if input_data.get("company"):
+        parts.append(f"Company: {input_data['company']}")
+    if input_data.get("role"):
+        parts.append(f"Role: {input_data['role']}")
+    if input_data.get("location"):
+        parts.append(f"Location: {input_data['location']}")
+    if input_data.get("context"):
+        parts.append(f"Context: {input_data['context']}")
+    return "\n".join(parts) if parts else "No structured input"
+
+
 async def analyze_results(state: AgentState) -> dict:
-    settings = get_settings()
+    input_data = state.get("input", {})
 
     results_summary = []
     for i, r in enumerate(state.get("search_results", [])):
@@ -53,12 +68,10 @@ async def analyze_results(state: AgentState) -> dict:
             f"    Content: {r.get('content', '')[:600]}"
         )
 
-    known_facts_str = json.dumps(state.get("known_facts", {}), indent=2) if state.get("known_facts") else "None"
+    input_str = _format_input_for_prompt(input_data)
 
-    user_prompt = f"""Original query: {state["person_query"]}
-
-Known facts:
-{known_facts_str}
+    user_prompt = f"""Original query / input:
+{input_str}
 
 Search results ({len(results_summary)} total):
 {chr(10).join(results_summary)}
@@ -81,12 +94,19 @@ Analyze these results and identify the person(s) they refer to."""
             "best_match_index": -1,
         }
 
+    people = analysis.get("identified_people", [])
+    best_idx = analysis.get("best_match_index", 0)
+    best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
+    best = people[best_idx] if best_idx >= 0 and people else {}
+    confidence_score = float(best.get("confidence", 0.5))
+
     logger.info(
-        f"Analysis found {len(analysis.get('identified_people', []))} potential matches, "
-        f"{len(analysis.get('ambiguities', []))} ambiguities"
+        f"Analysis found {len(people)} potential matches, "
+        f"{len(analysis.get('ambiguities', []))} ambiguities, confidence={confidence_score:.3f}"
     )
 
     return {
         "analyzed_results": analysis,
+        "confidence_score": confidence_score,
         "status": "analysis_complete",
     }

@@ -1,6 +1,9 @@
 import logging
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+from passlib.hash import bcrypt
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -43,14 +46,51 @@ async def get_db() -> AsyncSession:
         yield session
 
 
+async def seed_admin() -> None:
+    """Create default admin user if none exists."""
+    from app.models.db_models import AdminUser
+
+    settings = get_settings()
+    factory = get_session_factory()
+
+    async with factory() as session:
+        result = await session.execute(select(AdminUser).limit(1))
+        existing = result.scalars().first()
+        if existing is not None:
+            logger.info("Admin user already exists, skipping seed")
+            return
+
+        admin = AdminUser(
+            email=settings.admin_email,
+            password_hash=bcrypt.hash(settings.admin_password),
+            role="admin",
+        )
+        session.add(admin)
+        await session.commit()
+        logger.info("Default admin user created")
+
+
 async def init_db() -> None:
-    """Create all tables. Called on app startup."""
-    from app.models.db_models import DiscoverySession, PersonProfileRecord, SearchCacheEntry  # noqa: F401
+    """Create all tables and seed admin. Called on app startup."""
+    from app.models.db_models import (  # noqa: F401
+        Person,
+        PersonSource,
+        SearchCache,
+        DiscoveryJob,
+        PersonVersion,
+        AdminUser,
+        WebhookEndpoint,
+        WebhookDelivery,
+        ApiKey,
+        ApiUsageLog,
+    )
 
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables initialized")
+
+    await seed_admin()
 
 
 async def close_db() -> None:
