@@ -35,13 +35,19 @@ class Settings(BaseSettings):
     groq_api_key: str = ""  # Optional: Groq for ultra-fast inference
     together_api_key: str = ""  # Optional: Together AI for open-source models
 
+    jwt_secret_key: str = ""
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
     confidence_threshold: float = 0.75
     max_search_queries: int = 6
+    max_concurrent_jobs: int = 5
+    max_daily_discoveries: int = 100
 
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
+    db_pool_size: int = 10
+    db_pool_overflow: int = 20
+    db_pool_recycle: int = 1800
     cache_ttl_seconds: int = 3600
 
     # Cache TTL per source (seconds)

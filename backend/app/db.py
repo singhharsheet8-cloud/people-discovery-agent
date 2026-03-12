@@ -21,10 +21,18 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(
-            settings.database_url,
-            echo=settings.log_level.upper() == "DEBUG",
-        )
+        engine_kwargs: dict = {
+            "echo": settings.log_level.upper() == "DEBUG",
+        }
+        if "postgresql" in settings.database_url or "postgres" in settings.database_url:
+            engine_kwargs.update({
+                "pool_size": settings.db_pool_size,
+                "max_overflow": settings.db_pool_overflow,
+                "pool_recycle": settings.db_pool_recycle,
+                "pool_pre_ping": True,
+                "pool_timeout": 30,
+            })
+        _engine = create_async_engine(settings.database_url, **engine_kwargs)
     return _engine
 
 

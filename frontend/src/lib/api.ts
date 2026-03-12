@@ -27,11 +27,14 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     headers,
   });
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined" && window.location.pathname.startsWith("/admin")) {
+      localStorage.removeItem("admin_token");
+      window.location.href = "/login?expired=1";
+      throw new Error("Session expired");
+    }
     const error = await res.json().catch(() => ({ detail: res.statusText }));
-    const detail = typeof error === "object" && error !== null && "detail" in error
-      ? (error as { detail?: string }).detail
-      : res.statusText;
-    throw new Error(typeof detail === "string" ? detail : `API error: ${res.status}`);
+    const message = error?.message || error?.detail || res.statusText;
+    throw new Error(typeof message === "string" ? message : `API error: ${res.status}`);
   }
   return res.json();
 }

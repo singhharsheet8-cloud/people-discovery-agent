@@ -3,13 +3,15 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Query, HTTPException, Depends
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session_factory
 from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion
 from app.cache import cleanup_expired_cache
+from app.auth import require_admin
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -70,11 +72,11 @@ class PersonDetail(BaseModel):
 
 
 class PersonUpdate(BaseModel):
-    name: str | None = None
-    current_role: str | None = None
-    company: str | None = None
-    location: str | None = None
-    bio: str | None = None
+    name: str | None = Field(None, max_length=255)
+    current_role: str | None = Field(None, max_length=500)
+    company: str | None = Field(None, max_length=500)
+    location: str | None = Field(None, max_length=255)
+    bio: str | None = Field(None, max_length=10000)
 
 
 class JobDetail(BaseModel):
@@ -98,13 +100,33 @@ class JobDetail(BaseModel):
 async def discover_person(request: DiscoverRequest):
     """Single-shot person discovery. Returns a job ID for polling."""
     import asyncio
-    from app.agent.graph import graph
+
+    settings = get_settings()
+    factory = get_session_factory()
+
+    async with factory() as session:
+        running_count = (await session.execute(
+            select(func.count()).select_from(DiscoveryJob).where(DiscoveryJob.status == "running")
+        )).scalar() or 0
+        if running_count >= settings.max_concurrent_jobs:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many concurrent discovery jobs ({running_count}/{settings.max_concurrent_jobs}). Try again shortly.",
+            )
+
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        daily_count = (await session.execute(
+            select(func.count()).select_from(DiscoveryJob).where(DiscoveryJob.created_at >= today_start)
+        )).scalar() or 0
+        if daily_count >= settings.max_daily_discoveries:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily discovery limit reached ({settings.max_daily_discoveries}). Try again tomorrow.",
+            )
 
     job_id = str(uuid.uuid4())
     input_data = request.model_dump(exclude_defaults=False)
 
-    # Create job record
-    factory = get_session_factory()
     async with factory() as session:
         job = DiscoveryJob(
             id=job_id,
@@ -114,7 +136,6 @@ async def discover_person(request: DiscoverRequest):
         session.add(job)
         await session.commit()
 
-    # Run discovery in background
     asyncio.create_task(_run_discovery(job_id, input_data))
 
     return DiscoverResponse(
@@ -389,7 +410,7 @@ async def get_person(person_id: str):
 
 
 @router.put("/persons/{person_id}")
-async def update_person(person_id: str, update: PersonUpdate):
+async def update_person(person_id: str, update: PersonUpdate, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         person = (await session.execute(
@@ -418,7 +439,7 @@ async def update_person(person_id: str, update: PersonUpdate):
 
 
 @router.delete("/persons/{person_id}")
-async def delete_person(person_id: str):
+async def delete_person(person_id: str, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         person = (await session.execute(
@@ -439,7 +460,7 @@ async def delete_person(person_id: str):
 
 
 @router.post("/persons/{person_id}/re-search")
-async def re_search_person(person_id: str):
+async def re_search_person(person_id: str, _admin=Depends(require_admin)):
     """Re-run discovery with the person's current data as input."""
     import asyncio
 
@@ -482,7 +503,7 @@ async def re_search_person(person_id: str):
 # --- Cost dashboard ---
 
 @router.get("/admin/costs")
-async def get_cost_stats():
+async def get_cost_stats(_admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         # Total costs
@@ -530,8 +551,8 @@ async def get_cost_stats():
 # --- Auth endpoint for admin login ---
 
 class LoginRequest(BaseModel):
-    email: str = ""
-    password: str = ""
+    email: str = Field("", max_length=255)
+    password: str = Field("", max_length=128)
 
 
 @router.post("/auth/login")
@@ -564,7 +585,7 @@ async def health():
 
 
 @router.post("/cache/cleanup")
-async def cleanup_cache():
+async def cleanup_cache(_admin=Depends(require_admin)):
     count = await cleanup_expired_cache()
     return {"cleaned": count}
 

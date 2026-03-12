@@ -3,19 +3,20 @@ import logging
 import asyncio
 import httpx
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from app.db import get_session_factory
 from app.models.db_models import WebhookEndpoint, WebhookDelivery
+from app.auth import require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 
 class WebhookCreate(BaseModel):
-    url: str = Field(..., min_length=10)
-    secret: str | None = None
+    url: str = Field(..., min_length=10, max_length=2000)
+    secret: str | None = Field(None, max_length=255)
     events: list[str] = ["job.completed"]
 
 
@@ -28,7 +29,7 @@ class WebhookResponse(BaseModel):
 
 
 @router.post("", response_model=WebhookResponse)
-async def create_webhook(data: WebhookCreate):
+async def create_webhook(data: WebhookCreate, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         endpoint = WebhookEndpoint(
@@ -49,7 +50,7 @@ async def create_webhook(data: WebhookCreate):
 
 
 @router.get("")
-async def list_webhooks():
+async def list_webhooks(_admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.active == True))
@@ -67,7 +68,7 @@ async def list_webhooks():
 
 
 @router.delete("/{webhook_id}")
-async def delete_webhook(webhook_id: str):
+async def delete_webhook(webhook_id: str, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         endpoint = (await session.execute(
@@ -81,7 +82,7 @@ async def delete_webhook(webhook_id: str):
 
 
 @router.get("/{webhook_id}/deliveries")
-async def get_deliveries(webhook_id: str):
+async def get_deliveries(webhook_id: str, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(

@@ -2,11 +2,12 @@ import hashlib
 import secrets
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from app.db import get_session_factory
 from app.models.db_models import ApiKey, ApiUsageLog
+from app.auth import require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/api-keys", tags=["api-keys"])
@@ -27,7 +28,7 @@ class ApiKeyResponse(BaseModel):
 
 
 @router.post("", response_model=ApiKeyResponse)
-async def create_api_key(data: ApiKeyCreate):
+async def create_api_key(data: ApiKeyCreate, _admin=Depends(require_admin)):
     raw_key = f"dk_{secrets.token_urlsafe(32)}"
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
 
@@ -53,7 +54,7 @@ async def create_api_key(data: ApiKeyCreate):
 
 
 @router.get("")
-async def list_api_keys():
+async def list_api_keys(_admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(select(ApiKey).order_by(ApiKey.created_at.desc()))
@@ -83,7 +84,7 @@ async def list_api_keys():
 
 
 @router.delete("/{key_id}")
-async def revoke_api_key(key_id: str):
+async def revoke_api_key(key_id: str, _admin=Depends(require_admin)):
     factory = get_session_factory()
     async with factory() as session:
         key = (await session.execute(
