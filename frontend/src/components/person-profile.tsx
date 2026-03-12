@@ -167,22 +167,24 @@ export function PersonProfile({ profile }: PersonProfileProps) {
               Social Links
             </h3>
             <div className="flex flex-wrap gap-2">
-              {Object.entries(socialLinks).map(([platform, url]) => {
-                const Icon = SOCIAL_ICONS[platform.toLowerCase()] ?? Globe;
-                return (
-                  <a
-                    key={platform}
-                    href={typeof url === "string" ? url : "#"}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/5 transition-colors"
-                  >
-                    <Icon size={16} />
-                    {platform}
-                    <ExternalLink size={12} />
-                  </a>
-                );
-              })}
+              {Object.entries(socialLinks)
+                .filter(([, url]) => url != null && typeof url === "string" && url.length > 0)
+                .map(([platform, url]) => {
+                  const Icon = SOCIAL_ICONS[platform.toLowerCase()] ?? Globe;
+                  return (
+                    <a
+                      key={platform}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/5 transition-colors"
+                    >
+                      <Icon size={16} />
+                      {platform}
+                      <ExternalLink size={12} />
+                    </a>
+                  );
+                })}
             </div>
           </div>
         )}

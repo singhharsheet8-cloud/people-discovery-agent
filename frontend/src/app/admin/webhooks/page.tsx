@@ -162,7 +162,7 @@ export default function WebhooksPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-medium truncate">{w.url}</p>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {w.events.map((e) => (
+                    {(w.events ?? []).map((e) => (
                       <span
                         key={e}
                         className="px-2 py-0.5 rounded text-xs bg-white/10 text-gray-400"

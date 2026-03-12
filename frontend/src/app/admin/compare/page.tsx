@@ -39,12 +39,13 @@ export default function ComparePage() {
     debounceRef.current[key] = setTimeout(async () => {
       try {
         const res = await getPersons(1, 10, search);
+        const items = Array.isArray(res.items) ? res.items : [];
         if (side === "left") {
-          setSuggestionsLeft(res.items);
-          setOpenLeft(res.items.length > 0);
+          setSuggestionsLeft(items);
+          setOpenLeft(items.length > 0);
         } else {
-          setSuggestionsRight(res.items);
-          setOpenRight(res.items.length > 0);
+          setSuggestionsRight(items);
+          setOpenRight(items.length > 0);
         }
       } catch {
         if (side === "left") setSuggestionsLeft([]);

@@ -24,12 +24,15 @@ export default function AdminPersonsPage() {
     getPersons(page, PER_PAGE, search)
       .then((res) => {
         if (!cancelled) {
-          setPersons(res.items);
-          setTotal(res.total);
+          setPersons(Array.isArray(res.items) ? res.items : []);
+          setTotal(res.total ?? 0);
         }
       })
       .catch(() => {
-        if (!cancelled) setPersons([]);
+        if (!cancelled) {
+          setPersons([]);
+          setTotal(0);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

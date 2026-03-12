@@ -265,7 +265,7 @@ export default function PersonDetailPage() {
       )}
 
       {/* Tabbed source viewer */}
-      {person.sources && person.sources.length > 0 && (
+      {Array.isArray(person.sources) && person.sources.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
           <div className="flex border-b border-white/10 overflow-x-auto">
             {sourceTabs.map((tab) => (
@@ -313,7 +313,7 @@ export default function PersonDetailPage() {
       )}
 
       {/* Job history */}
-      {person.jobs && person.jobs.length > 0 && (
+      {Array.isArray(person.jobs) && person.jobs.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider p-4 border-b border-white/10">
             Discovery Jobs

@@ -52,24 +52,33 @@ export default function ApiKeysPage() {
 
   async function createKey() {
     if (!newKeyName.trim()) return;
-    const res = await fetch(`${API_BASE}/api-keys`, {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ name: newKeyName, rate_limit_per_day: newKeyLimit }),
-    });
-    const data = await res.json();
-    setCreatedKey(data.key);
-    setNewKeyName("");
-    fetchKeys();
+    try {
+      const res = await fetch(`${API_BASE}/api-keys`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ name: newKeyName, rate_limit_per_day: newKeyLimit }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCreatedKey(data.key);
+      setNewKeyName("");
+      fetchKeys();
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   async function revokeKey(id: string) {
     if (!confirm("Revoke this API key?")) return;
-    await fetch(`${API_BASE}/api-keys/${id}`, {
-      method: "DELETE",
-      headers: getAuthHeaders(),
-    });
-    fetchKeys();
+    try {
+      await fetch(`${API_BASE}/api-keys/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeaders(),
+      });
+      fetchKeys();
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   function copyKey() {
@@ -158,7 +167,7 @@ export default function ApiKeysPage() {
                 <td className="px-4 py-3 text-white font-medium">{k.name}</td>
                 <td className="px-4 py-3 text-gray-300">{k.rate_limit_per_day}/day</td>
                 <td className="px-4 py-3 text-gray-300">{k.usage_count} requests</td>
-                <td className="px-4 py-3 text-gray-300">${k.total_cost.toFixed(4)}</td>
+                <td className="px-4 py-3 text-gray-300">${(k.total_cost ?? 0).toFixed(4)}</td>
                 <td className="px-4 py-3">
                   <span
                     className={`px-2 py-0.5 rounded-full text-xs ${

@@ -43,8 +43,10 @@ export default function CostDashboardPage() {
     );
   }
 
+  const recentJobs = stats.recent_jobs ?? [];
+
   const maxCost =
-    Math.max(...stats.recent_jobs.map((j) => j.total_cost), 0.001) || 0.001;
+    Math.max(...recentJobs.map((j) => j.total_cost), 0.001) || 0.001;
 
   return (
     <div className="space-y-6">
@@ -83,13 +85,13 @@ export default function CostDashboardPage() {
       </div>
 
       {/* Bar chart - recent jobs by cost */}
-      {stats.recent_jobs.length > 0 && (
+      {recentJobs.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">
             Recent Jobs by Cost
           </h2>
           <div className="space-y-3">
-            {stats.recent_jobs.map((j) => (
+            {recentJobs.map((j) => (
               <div key={j.id} className="flex items-center gap-4">
                 <span className="w-24 text-xs font-mono text-gray-500 truncate">
                   {j.id.slice(0, 8)}...
@@ -119,7 +121,7 @@ export default function CostDashboardPage() {
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider p-4 border-b border-white/10">
           Recent Jobs
         </h2>
-        {stats.recent_jobs.length === 0 ? (
+        {recentJobs.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No jobs yet</div>
         ) : (
           <div className="overflow-x-auto">
@@ -147,7 +149,7 @@ export default function CostDashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {stats.recent_jobs.map((j) => (
+                {recentJobs.map((j) => (
                   <tr
                     key={j.id}
                     className="border-b border-white/5 hover:bg-white/5"

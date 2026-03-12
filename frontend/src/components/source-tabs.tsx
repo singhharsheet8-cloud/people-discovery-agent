@@ -128,9 +128,9 @@ export function SourceTabs({ sources }: SourceTabsProps) {
           </pre>
         ) : (
           <div className="space-y-3">
-            {activeSources.map((source) => (
+            {activeSources.map((source, idx) => (
               <a
-                key={source.id}
+                key={source.id || `${source.url}-${idx}`}
                 href={source.url}
                 target="_blank"
                 rel="noopener noreferrer"
