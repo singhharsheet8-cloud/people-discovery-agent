@@ -39,6 +39,12 @@ docker-compose.override.yml
 *.db
 data/
 
+# Test/Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+coverage/
+
 # Misc
 *.log
 .cursor/
