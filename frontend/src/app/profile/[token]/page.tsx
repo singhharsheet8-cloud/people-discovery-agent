@@ -15,6 +15,7 @@ import {
   Star,
   Calendar,
 } from "lucide-react";
+import CareerTimeline from "@/components/career-timeline";
 
 interface PublicProfile {
   id: string;
@@ -163,28 +164,7 @@ export default function PublicProfilePage() {
 
             {profile.career_timeline && profile.career_timeline.length > 0 && (
               <section>
-                <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <Calendar size={18} /> Career Timeline
-                </h2>
-                <div className="space-y-3">
-                  {profile.career_timeline.map((entry, i) => (
-                    <div key={i} className="flex gap-4 items-start">
-                      <div className="w-24 shrink-0 text-sm text-gray-500 pt-0.5">
-                        {entry.period || entry.year || ""}
-                      </div>
-                      <div>
-                        <div className="text-white font-medium">
-                          {entry.role || entry.title || ""}
-                        </div>
-                        {(entry.company || entry.organization) && (
-                          <div className="text-gray-400 text-sm">
-                            {entry.company || entry.organization}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <CareerTimeline timeline={profile.career_timeline} />
               </section>
             )}
 

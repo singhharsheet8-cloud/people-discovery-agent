@@ -287,9 +287,6 @@ export default function PersonDetailPage() {
       {/* Career Timeline */}
       {Array.isArray(person.career_timeline) && person.career_timeline.length > 0 && (
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">
-            Career Timeline
-          </h2>
           <CareerTimeline
             timeline={person.career_timeline as Array<{
               period?: string;
@@ -299,6 +296,9 @@ export default function PersonDetailPage() {
               company?: string;
               organization?: string;
               description?: string;
+              type?: string;
+              start_date?: string;
+              end_date?: string;
             }>}
           />
         </div>
