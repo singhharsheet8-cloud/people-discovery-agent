@@ -206,8 +206,98 @@ async def batch_discover(request: BatchDiscoverRequest):
     return {"jobs": jobs, "total": len(jobs)}
 
 
+def _normalize_name(name: str) -> str:
+    """Normalize a person name for matching: lowercase, strip whitespace/punctuation."""
+    import re
+    return re.sub(r"[^a-z\s]", "", name.lower()).strip()
+
+
+def _names_match(a: str, b: str) -> bool:
+    """Check if two names refer to the same person (case-insensitive, order-insensitive)."""
+    na, nb = _normalize_name(a), _normalize_name(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    parts_a, parts_b = set(na.split()), set(nb.split())
+    if len(parts_a) >= 2 and len(parts_b) >= 2:
+        return parts_a == parts_b
+    return False
+
+
+def _companies_match(a: str | None, b: str | None) -> bool:
+    """Check if two company names match (case-insensitive, ignoring common suffixes)."""
+    if not a and not b:
+        return True
+    if not a or not b:
+        return False
+    import re
+    def _clean(c: str) -> str:
+        c = c.lower().strip()
+        c = re.sub(r"\b(inc|corp|corporation|ltd|llc|co|company|group|holdings)\b\.?", "", c)
+        return re.sub(r"\s+", " ", c).strip()
+    return _clean(a) == _clean(b)
+
+
+async def _find_existing_person(session: AsyncSession, name: str, company: str | None) -> Person | None:
+    """Find an existing person matching by name + company."""
+    candidates = (await session.execute(
+        select(Person).where(func.lower(Person.name) == name.lower().strip())
+    )).scalars().all()
+    if candidates:
+        for c in candidates:
+            if _companies_match(c.company, company):
+                return c
+        return candidates[0] if len(candidates) == 1 else None
+
+    all_persons = (await session.execute(select(Person))).scalars().all()
+    for p in all_persons:
+        if _names_match(p.name, name) and _companies_match(p.company, company):
+            return p
+    return None
+
+
+def _merge_scalar(old_val: str | None, new_val: str | None) -> str | None:
+    """Pick the richer scalar value (longer non-empty string wins)."""
+    if not new_val:
+        return old_val
+    if not old_val:
+        return new_val
+    return new_val if len(new_val) >= len(old_val) else old_val
+
+
+def _merge_list_field(old_list: list | None, new_list: list | None) -> list:
+    """Union two lists, deduplicating by normalized string content."""
+    old_list = old_list or []
+    new_list = new_list or []
+    seen: set[str] = set()
+    merged: list = []
+    for item in old_list + new_list:
+        if isinstance(item, str):
+            key = item.strip().lower()
+        elif isinstance(item, dict):
+            key = json.dumps(item, sort_keys=True)
+        else:
+            key = str(item)
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _merge_dict_field(old_dict: dict | None, new_dict: dict | None) -> dict:
+    """Merge two dicts, preferring non-null values from the newer one."""
+    old_dict = old_dict or {}
+    new_dict = new_dict or {}
+    merged = {**old_dict}
+    for k, v in new_dict.items():
+        if v is not None and (v != "" or k not in merged):
+            merged[k] = v
+    return merged
+
+
 async def _run_discovery(job_id: str, input_data: dict):
-    """Run the LangGraph agent and store results."""
+    """Run the LangGraph agent, then merge results into existing or new person."""
     from app.agent.graph import graph
 
     start_time = time.time()
@@ -236,29 +326,89 @@ async def _run_discovery(job_id: str, input_data: dict):
         elapsed_ms = (time.time() - start_time) * 1000
 
         async with factory() as session:
-            # Create or find person
-            person = Person(
-                name=profile.get("name", input_data.get("name", "Unknown")),
-                current_role=profile.get("current_role"),
-                company=profile.get("company"),
-                location=profile.get("location"),
-                bio=profile.get("bio"),
-                confidence_score=profile.get("confidence_score", result.get("confidence_score", 0)),
-                status="discovered",
-            )
-            # Set JSON fields
-            for field in ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline"):
-                val = profile.get(field)
-                if val:
-                    person.set_json(field, val)
+            job_row = (await session.execute(
+                select(DiscoveryJob).where(DiscoveryJob.id == job_id)
+            )).scalar_one_or_none()
 
-            session.add(person)
+            existing_person: Person | None = None
+
+            if job_row and job_row.person_id:
+                existing_person = (await session.execute(
+                    select(Person).where(Person.id == job_row.person_id)
+                )).scalar_one_or_none()
+
+            if not existing_person:
+                new_name = profile.get("name", input_data.get("name", ""))
+                new_company = profile.get("company", input_data.get("company"))
+                existing_person = await _find_existing_person(session, new_name, new_company)
+
+            is_merge = existing_person is not None
+
+            if is_merge:
+                person = existing_person
+                logger.info(f"Merging discovery into existing person {person.id} ({person.name})")
+
+                person.name = profile.get("name") or person.name
+                person.current_role = _merge_scalar(person.current_role, profile.get("current_role"))
+                person.company = _merge_scalar(person.company, profile.get("company"))
+                person.location = _merge_scalar(person.location, profile.get("location"))
+                person.bio = _merge_scalar(person.bio, profile.get("bio"))
+                person.confidence_score = max(
+                    person.confidence_score,
+                    profile.get("confidence_score", result.get("confidence_score", 0)),
+                )
+                person.status = "discovered"
+
+                list_fields = ("education", "key_facts", "expertise", "notable_work", "career_timeline")
+                for field in list_fields:
+                    old_val = person.get_json(field)
+                    new_val = profile.get(field)
+                    merged = _merge_list_field(old_val, new_val)
+                    if merged:
+                        person.set_json(field, merged)
+
+                dict_fields = ("social_links",)
+                for field in dict_fields:
+                    old_val = person.get_json(field)
+                    new_val = profile.get(field)
+                    merged = _merge_dict_field(old_val, new_val)
+                    if merged:
+                        person.set_json(field, merged)
+
+                person.version += 1
+                person.updated_at = datetime.now(timezone.utc)
+
+            else:
+                person = Person(
+                    name=profile.get("name", input_data.get("name", "Unknown")),
+                    current_role=profile.get("current_role"),
+                    company=profile.get("company"),
+                    location=profile.get("location"),
+                    bio=profile.get("bio"),
+                    confidence_score=profile.get("confidence_score", result.get("confidence_score", 0)),
+                    status="discovered",
+                )
+                for field in ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline"):
+                    val = profile.get(field)
+                    if val:
+                        person.set_json(field, val)
+                session.add(person)
+
             await session.flush()
 
-            synthesized_urls = set()
+            existing_urls: set[str] = set()
+            if is_merge:
+                existing_sources = (await session.execute(
+                    select(PersonSource.url).where(PersonSource.person_id == person.id)
+                )).scalars().all()
+                existing_urls = {u for u in existing_sources if u}
+
+            new_urls: set[str] = set()
             for source in profile.get("sources", []):
                 url = source.get("url", "")
-                synthesized_urls.add(url)
+                if url in existing_urls or url in new_urls:
+                    continue
+                new_urls.add(url)
                 ps = PersonSource(
                     person_id=person.id,
                     source_type=source.get("platform", "web"),
@@ -274,8 +424,9 @@ async def _run_discovery(job_id: str, input_data: dict):
             for sr in result.get("search_results", []):
                 if isinstance(sr, dict):
                     url = sr.get("url", "")
-                    if url in synthesized_urls:
+                    if url in existing_urls or url in new_urls:
                         continue
+                    new_urls.add(url)
                     ps = PersonSource(
                         person_id=person.id,
                         source_type=sr.get("source_type", "web"),
@@ -289,40 +440,43 @@ async def _run_discovery(job_id: str, input_data: dict):
                     )
                     session.add(ps)
 
-            # Create initial version
+            trigger = "re-search" if is_merge else "initial"
             version = PersonVersion(
                 person_id=person.id,
-                version_number=1,
+                version_number=person.version,
                 profile_snapshot=json.dumps(profile),
-                trigger="initial",
+                trigger=trigger,
             )
             session.add(version)
 
-            # Update job
-            job_stmt = select(DiscoveryJob).where(DiscoveryJob.id == job_id)
-            job_result = await session.execute(job_stmt)
-            job = job_result.scalar_one_or_none()
-            if job:
-                job.person_id = person.id
-                job.status = "completed"
-                job.total_cost = result.get("cost_tracker", {}).get("total", 0.0)
-                job.cost_breakdown = json.dumps(result.get("cost_tracker", {}))
-                job.latency_ms = elapsed_ms
-                job.sources_hit = len(result.get("search_results", []))
-                job.completed_at = datetime.now(timezone.utc)
+            if job_row:
+                job_row.person_id = person.id
+                job_row.status = "completed"
+                job_row.total_cost = result.get("cost_tracker", {}).get("total", 0.0)
+                job_row.cost_breakdown = json.dumps(result.get("cost_tracker", {}))
+                job_row.latency_ms = elapsed_ms
+                job_row.sources_hit = len(result.get("search_results", []))
+                job_row.completed_at = datetime.now(timezone.utc)
 
             await session.commit()
-            logger.info(f"Discovery complete for job {job_id}: {person.name} ({elapsed_ms:.0f}ms)")
+            action = "merged into" if is_merge else "created"
+            logger.info(
+                f"Discovery complete for job {job_id}: {action} {person.name} "
+                f"(v{person.version}, {len(new_urls)} new sources, {elapsed_ms:.0f}ms)"
+            )
 
         from app.api.webhooks import fire_webhooks
-        await fire_webhooks("job.completed", {
+        event = "person.updated" if is_merge else "job.completed"
+        await fire_webhooks(event, {
             "job_id": job_id,
             "person_id": person.id,
             "person_name": person.name,
             "status": "completed",
+            "merged": is_merge,
             "total_cost": result.get("cost_tracker", {}).get("total", 0.0),
             "latency_ms": round(elapsed_ms),
             "sources_hit": len(result.get("search_results", [])),
+            "new_sources_added": len(new_urls),
         })
 
     except Exception as e:
