@@ -1,9 +1,13 @@
+import asyncio
+import csv
+import io
 import json
 import time
 import uuid
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,8 +126,6 @@ class JobDetail(BaseModel):
 @router.post("/discover", response_model=DiscoverResponse)
 async def discover_person(request: DiscoverRequest):
     """Single-shot person discovery. Returns a job ID for polling."""
-    import asyncio
-
     settings = get_settings()
     factory = get_session_factory()
 
@@ -166,6 +168,42 @@ async def discover_person(request: DiscoverRequest):
         status="running",
         message="Discovery started. Poll GET /api/jobs/{job_id} for status.",
     )
+
+
+class BatchDiscoverRequest(BaseModel):
+    persons: list[DiscoverRequest] = Field(..., min_length=1, max_length=20)
+
+
+@router.post("/discover/batch")
+async def batch_discover(request: BatchDiscoverRequest):
+    """Start discovery for multiple people. Returns list of job IDs."""
+    settings = get_settings()
+    factory = get_session_factory()
+
+    async with factory() as session:
+        running_count = (await session.execute(
+            select(func.count()).select_from(DiscoveryJob).where(DiscoveryJob.status == "running")
+        )).scalar() or 0
+        if running_count + len(request.persons) > settings.max_concurrent_jobs:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many concurrent jobs. {running_count} running, {len(request.persons)} requested, max {settings.max_concurrent_jobs}",
+            )
+
+    jobs = []
+    for person in request.persons:
+        job_id = str(uuid.uuid4())
+        input_data = person.model_dump(exclude_defaults=False)
+
+        async with factory() as session:
+            job = DiscoveryJob(id=job_id, input_params=json.dumps(input_data), status="running")
+            session.add(job)
+            await session.commit()
+
+        asyncio.create_task(_run_discovery(job_id, input_data))
+        jobs.append({"job_id": job_id, "name": person.name, "status": "running"})
+
+    return {"jobs": jobs, "total": len(jobs)}
 
 
 async def _run_discovery(job_id: str, input_data: dict):
@@ -512,6 +550,61 @@ async def delete_person(person_id: str, _admin=Depends(require_admin)):
         return {"deleted": True}
 
 
+@router.get("/persons/{person_id}/export")
+async def export_person(person_id: str, format: str = Query("json", pattern="^(json|csv)$")):
+    """Export person profile as JSON or CSV."""
+    _validate_uuid(person_id, "person_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources = (await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )).scalars().all()
+
+        profile = _person_to_dict(person)
+        profile["sources"] = [
+            {
+                "source_type": s.source_type,
+                "platform": s.platform,
+                "url": s.url,
+                "title": s.title,
+                "confidence": round(max(s.relevance_score or 0, s.source_reliability or 0), 2),
+            }
+            for s in sources
+        ]
+
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Field", "Value"])
+        for key in ("name", "current_role", "company", "location", "bio", "confidence_score", "reputation_score"):
+            writer.writerow([key, profile.get(key, "")])
+        writer.writerow([])
+        writer.writerow(["Source Platform", "URL", "Title", "Confidence"])
+        for s in profile.get("sources", []):
+            writer.writerow([s.get("platform", ""), s.get("url", ""), s.get("title", ""), s.get("confidence", "")])
+
+        output.seek(0)
+        filename = f"{profile.get('name', 'export').replace(' ', '_')}_profile.csv"
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # JSON export
+    filename = f"{profile.get('name', 'export').replace(' ', '_')}_profile.json"
+    return JSONResponse(
+        content=profile,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/persons/{person_id}/re-search")
 async def re_search_person(person_id: str, _admin=Depends(require_admin)):
     """Re-run discovery with the person's current data as input."""
@@ -611,14 +704,30 @@ class LoginRequest(BaseModel):
 @router.post("/auth/login")
 async def admin_login(request: LoginRequest):
     """Validate admin credentials and return a JWT token."""
-    from app.auth import verify_admin, create_token
+    from app.auth import verify_admin, create_token_pair
 
     user = await verify_admin(request.email, request.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_token({"sub": user.email, "role": user.role})
-    return {"token": token, "email": user.email, "role": user.role}
+    tokens = create_token_pair({"sub": user.email, "role": user.role})
+    return {**tokens, "email": user.email, "role": user.role}
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=10)
+
+
+@router.post("/auth/refresh")
+async def refresh_token(request: RefreshRequest):
+    from app.auth import verify_refresh_token, create_token_pair
+
+    payload = verify_refresh_token(request.refresh_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    tokens = create_token_pair({"sub": payload["sub"], "role": payload["role"]})
+    return tokens
 
 
 # --- Utility ---

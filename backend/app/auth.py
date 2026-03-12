@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 
 _auto_generated_key: str | None = None
@@ -48,6 +50,35 @@ def create_token(data: dict) -> str:
     return jwt.encode(to_encode, _get_secret_key(), algorithm=ALGORITHM)
 
 
+def create_token_pair(data: dict) -> dict:
+    """Create both access and refresh tokens."""
+    access_data = data.copy()
+    access_data["type"] = "access"
+    access_expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_data["exp"] = access_expire
+    access_token = jwt.encode(access_data, _get_secret_key(), algorithm=ALGORITHM)
+
+    refresh_data = data.copy()
+    refresh_data["type"] = "refresh"
+    refresh_expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_data["exp"] = refresh_expire
+    refresh_token = jwt.encode(refresh_data, _get_secret_key(), algorithm=ALGORITHM)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "token_type": "bearer",
+    }
+
+
+def verify_refresh_token(token: str) -> dict | None:
+    payload = verify_token(token)
+    if payload and payload.get("type") == "refresh":
+        return payload
+    return None
+
+
 def verify_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, _get_secret_key(), algorithms=[ALGORITHM])
@@ -71,6 +102,8 @@ async def require_admin(request: Request) -> dict:
     payload = verify_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if payload.get("type") == "refresh":
+        raise HTTPException(status_code=401, detail="Refresh tokens cannot be used as access tokens")
     if payload.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return payload
@@ -81,4 +114,7 @@ async def optional_auth(request: Request) -> dict | None:
     token = _extract_token(request)
     if not token:
         return None
-    return verify_token(token)
+    payload = verify_token(token)
+    if payload and payload.get("type") == "refresh":
+        return None
+    return payload

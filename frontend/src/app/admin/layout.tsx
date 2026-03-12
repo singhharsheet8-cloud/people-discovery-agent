@@ -28,7 +28,7 @@ export default function AdminLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("admin_token");
+    const token = localStorage.getItem("access_token") || localStorage.getItem("admin_token");
     if (!token) {
       router.push("/login");
     } else {
@@ -91,6 +91,8 @@ export default function AdminLayout({
       </nav>
       <button
         onClick={() => {
+          localStorage.removeItem("access_token");
+          localStorage.removeItem("refresh_token");
           localStorage.removeItem("admin_token");
           router.push("/login");
         }}

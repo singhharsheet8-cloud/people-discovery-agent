@@ -37,7 +37,12 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = ""
     cors_origins: str = "http://localhost:3000"
+    cors_allow_regex: str = ""  # empty = disabled
     log_level: str = "INFO"
+
+    sentry_dsn: str = ""
+    environment: str = "development"
+    redis_url: str = ""  # empty = use in-memory
 
     confidence_threshold: float = 0.75
     max_search_queries: int = 12

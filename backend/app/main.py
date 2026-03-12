@@ -1,6 +1,8 @@
+import json as json_lib
+import logging
 import os
 import ssl
-import logging
+import sys
 import traceback
 from contextlib import asynccontextmanager
 
@@ -9,6 +11,8 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+import sentry_sdk
 
 from app.config import get_settings
 from app.db import init_db, close_db
@@ -44,18 +48,43 @@ _fix_ssl()
 
 settings = get_settings()
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-)
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_entry = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+        }
+        rid = request_id_var.get("")
+        if rid:
+            log_entry["request_id"] = rid
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json_lib.dumps(log_entry)
+
+
+def setup_logging(level: str):
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    root.handlers = [handler]
+
+
+setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
     import asyncio
+
     from app.cache import cleanup_expired_cache
+
+    await init_db()
 
     async def _periodic_cache_cleanup():
         while True:
@@ -69,6 +98,9 @@ async def lifespan(app: FastAPI):
     yield
     cleanup_task.cancel()
     await close_db()
+    from app.redis_client import close_redis
+
+    await close_redis()
 
 
 app = FastAPI(
@@ -77,6 +109,15 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        environment=settings.environment,
+        release=f"people-discovery@{app.version}",
+    )
 
 
 # ── Global Exception Handlers ──────────────────────────────────────
@@ -141,14 +182,16 @@ def _status_to_code(status: int) -> str:
 
 # ── Middleware (order matters: last added = first executed) ─────────
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
-    allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_kwargs = {
+    "allow_origins": settings.cors_origins.split(","),
+    "allow_credentials": True,
+    "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
+}
+if settings.cors_allow_regex:
+    cors_kwargs["allow_origin_regex"] = settings.cors_allow_regex
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)

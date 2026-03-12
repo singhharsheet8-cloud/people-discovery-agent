@@ -13,7 +13,7 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """In-memory sliding-window rate limiter. Use Redis for multi-instance."""
+    """In-memory or Redis-backed rate limiter. API keys get 5x the limit."""
 
     def __init__(self, app, requests_per_minute: int = 30, ws_per_minute: int = 10):
         super().__init__(app)
@@ -29,26 +29,47 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return forwarded.split(",")[0].strip()
         return client_host
 
-    def _is_rate_limited(self, client_ip: str, limit: int) -> bool:
+    def _get_rate_key(self, request: Request) -> tuple[str, int]:
+        """Return (rate_key, limit). API keys get per-key limits."""
+        api_key = request.headers.get("x-api-key", "")
+        if api_key:
+            return f"apikey:{api_key[:16]}", self.rpm * 5
+        return f"ip:{self._get_client_ip(request)}", self.rpm
+
+    async def _is_rate_limited_redis(self, key: str, limit: int) -> bool:
+        from app.redis_client import get_redis
+
+        r = await get_redis()
+        if not r:
+            return self._is_rate_limited_memory(key, limit)
+        try:
+            redis_key = f"ratelimit:{key}"
+            current = await r.incr(redis_key)
+            if current == 1:
+                await r.expire(redis_key, 60)
+            return current > limit
+        except Exception:
+            return self._is_rate_limited_memory(key, limit)
+
+    def _is_rate_limited_memory(self, key: str, limit: int) -> bool:
         now = time.time()
         window_start = now - 60
-        self._requests[client_ip] = [
-            t for t in self._requests[client_ip] if t > window_start
-        ]
-        if len(self._requests[client_ip]) >= limit:
+        self._requests[key] = [t for t in self._requests[key] if t > window_start]
+        if len(self._requests[key]) >= limit:
             return True
-        self._requests[client_ip].append(now)
+        self._requests[key].append(now)
         return False
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/api/health", "/docs", "/openapi.json"):
             return await call_next(request)
 
-        client_ip = self._get_client_ip(request)
-        limit = self.ws_rpm if "ws" in request.url.path else self.rpm
+        key, limit = self._get_rate_key(request)
+        if "ws" in request.url.path:
+            limit = self.ws_rpm
 
-        if self._is_rate_limited(client_ip, limit):
-            logger.warning(f"Rate limited: {client_ip} on {request.url.path}")
+        if await self._is_rate_limited_redis(key, limit):
+            logger.warning(f"Rate limited: {key} on {request.url.path}")
             return JSONResponse(
                 status_code=429,
                 content={
