@@ -36,50 +36,71 @@ describe("Type contracts", () => {
       career_timeline: [],
       social_links: {},
       sources: [],
+      jobs: [],
       created_at: "2024-01-01",
       updated_at: "2024-01-02",
-      source_count: 5,
-      cost_breakdown: {},
+      status: "active",
+      version: 1,
     };
     expect(profile.confidence_score).toBe(0.95);
   });
 
   it("PersonSource includes confidence field", () => {
     const source: PersonSource = {
-      id: "s1",
-      source_type: "web",
       platform: "linkedin",
       url: "https://linkedin.com/in/test",
       title: "Test Profile",
-      snippet: "snippet",
       relevance_score: 0.9,
       source_reliability: 0.85,
       confidence: 0.9,
-      created_at: "2024-01-01",
     };
     expect(source.confidence).toBe(0.9);
   });
 
-  it("JobSummary has status field", () => {
+  it("JobSummary has status and cost fields", () => {
     const job: JobSummary = {
       id: "j1",
       status: "completed",
-      input_params: {},
-      person_id: "p1",
-      error_message: null,
+      total_cost: 0.015,
+      sources_hit: 12,
+      cache_hits: 3,
       created_at: "2024-01-01",
       completed_at: "2024-01-01",
     };
     expect(job.status).toBe("completed");
+    expect(job.total_cost).toBe(0.015);
   });
 
-  it("CostStats has cost_by_source", () => {
-    const stats: CostStats = {
-      total_discoveries: 10,
-      total_cost: 1.5,
-      cost_by_source: { web: 0.5, llm: 1.0 },
-      recent_jobs: [],
+  it("PersonSummary has sources_count", () => {
+    const p: PersonSummary = {
+      id: "p1",
+      name: "Jane",
+      confidence_score: 0.9,
+      status: "active",
+      sources_count: 15,
+      created_at: "2024-01-01",
+      updated_at: "2024-01-02",
     };
-    expect(stats.total_cost).toBe(1.5);
+    expect(p.sources_count).toBe(15);
+  });
+
+  it("CostStats has recent_jobs array", () => {
+    const stats: CostStats = {
+      total_spend: 1.5,
+      total_jobs: 10,
+      average_cost: 0.15,
+      recent_jobs: [
+        {
+          id: "j1",
+          total_cost: 0.02,
+          latency_ms: 5000,
+          sources_hit: 8,
+          cache_hits: 2,
+          created_at: "2024-01-01",
+        },
+      ],
+    };
+    expect(stats.recent_jobs).toHaveLength(1);
+    expect(stats.average_cost).toBe(0.15);
   });
 });
