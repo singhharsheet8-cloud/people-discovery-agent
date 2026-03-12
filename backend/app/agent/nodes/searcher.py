@@ -93,14 +93,22 @@ def _build_gap_fill_queries(
             extra.append({"query": name, "search_type": "stackoverflow",
                           "rationale": "gap-fill: Stack Overflow activity"})
 
-    if "twitter" not in covered and input_data.get("twitter_handle"):
-        extra.append({"query": input_data["twitter_handle"],
-                      "search_type": "twitter",
-                      "rationale": "gap-fill: Twitter handle provided"})
-    if "instagram" not in covered and input_data.get("instagram_handle"):
-        extra.append({"query": input_data["instagram_handle"],
-                      "search_type": "instagram",
-                      "rationale": "gap-fill: Instagram handle provided"})
+    if "twitter" not in covered:
+        handle = input_data.get("twitter_handle", "")
+        if handle:
+            extra.append({"query": handle,
+                          "search_type": "twitter",
+                          "rationale": "gap-fill: Twitter handle provided"})
+        else:
+            extra.append({"query": name,
+                          "search_type": "twitter",
+                          "rationale": "gap-fill: discover Twitter presence"})
+    if "instagram" not in covered:
+        handle = input_data.get("instagram_handle", "")
+        if handle:
+            extra.append({"query": handle,
+                          "search_type": "instagram",
+                          "rationale": "gap-fill: Instagram handle provided"})
     if "linkedin_profile" not in covered and input_data.get("linkedin_url"):
         extra.append({"query": input_data["linkedin_url"],
                       "search_type": "linkedin_profile",
@@ -137,8 +145,11 @@ async def execute_searches(state: AgentState) -> dict:
         elif search_type == "linkedin_posts":
             tasks.append(_with_timeout(_run_linkedin_posts(query_str)))
         elif search_type == "twitter":
-            handle = input_data.get("twitter_handle", query_str)
-            tasks.append(_with_timeout(_run_twitter(handle)))
+            handle = input_data.get("twitter_handle", "")
+            if handle:
+                tasks.append(_with_timeout(_run_twitter(handle)))
+            else:
+                tasks.append(_with_timeout(_run_twitter_search(query_str)))
         elif search_type == "youtube":
             tasks.append(_with_timeout(_run_youtube(query_str)))
         elif search_type == "github":
@@ -194,8 +205,81 @@ async def execute_searches(state: AgentState) -> dict:
         except Exception as e:
             logger.warning(f"Firecrawl batch extract failed: {e}")
 
+    # Auto-discover and scrape Twitter/Instagram handles from gathered results
+    covered_types = {q.get("search_type", "web") if isinstance(q, dict) else "web" for q in queries}
+    has_twitter = "twitter" in covered_types or bool(input_data.get("twitter_handle"))
+    has_instagram = "instagram" in covered_types or bool(input_data.get("instagram_handle"))
+
+    if not has_twitter or not has_instagram:
+        discovered = _extract_social_handles(all_results, seen_urls)
+        social_tasks = []
+        if not has_twitter and discovered.get("twitter"):
+            logger.info(f"Auto-discovered Twitter handle: @{discovered['twitter']}")
+            social_tasks.append(("twitter", _with_timeout(_run_twitter(discovered["twitter"]))))
+        if not has_instagram and discovered.get("instagram"):
+            logger.info(f"Auto-discovered Instagram handle: @{discovered['instagram']}")
+            social_tasks.append(("instagram", _with_timeout(_run_instagram(discovered["instagram"]))))
+
+        if social_tasks:
+            social_results = await asyncio.gather(
+                *[t[1] for t in social_tasks], return_exceptions=True
+            )
+            for (platform, _), result_list in zip(social_tasks, social_results):
+                if isinstance(result_list, (Exception, type(None))):
+                    if isinstance(result_list, Exception):
+                        logger.warning(f"Auto-discovered {platform} scrape failed: {result_list}")
+                    continue
+                for result in result_list or []:
+                    r_dict = result.model_dump() if hasattr(result, "model_dump") else result
+                    url = r_dict.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_results.append(r_dict)
+
     logger.info(f"Total search results: {len(all_results)}")
     return {"search_results": all_results, "status": "searches_complete"}
+
+
+def _extract_social_handles(results: list[dict], seen_urls: set[str]) -> dict[str, str]:
+    """Scan gathered search results for Twitter/Instagram handles and URLs."""
+    import re
+    twitter_handle = ""
+    instagram_handle = ""
+
+    twitter_patterns = [
+        re.compile(r'(?:twitter\.com|x\.com)/(@?[\w]{1,15})\b', re.I),
+        re.compile(r'@([\w]{1,15})\b.*(?:twitter|tweet|on X\b)', re.I),
+    ]
+    instagram_patterns = [
+        re.compile(r'instagram\.com/([\w.]{1,30})\b', re.I),
+    ]
+
+    skip_twitter = {"home", "search", "explore", "i", "intent", "share", "hashtag", "settings", "login", "signup"}
+
+    for r in results:
+        text = f"{r.get('url', '')} {r.get('content', '')} {r.get('title', '')}"
+
+        if not twitter_handle:
+            for pat in twitter_patterns:
+                match = pat.search(text)
+                if match:
+                    handle = match.group(1).lstrip("@").lower()
+                    if handle not in skip_twitter and len(handle) >= 2:
+                        twitter_url = f"https://x.com/{handle}"
+                        if twitter_url not in seen_urls:
+                            twitter_handle = handle
+                            break
+
+        if not instagram_handle:
+            for pat in instagram_patterns:
+                match = pat.search(text)
+                if match:
+                    handle = match.group(1).lower()
+                    if handle not in ("p", "reel", "stories", "explore", "accounts") and len(handle) >= 2:
+                        instagram_handle = handle
+                        break
+
+    return {"twitter": twitter_handle, "instagram": instagram_handle}
 
 
 async def _with_timeout(coro, timeout: int = SEARCH_TIMEOUT):
@@ -220,6 +304,12 @@ async def _run_linkedin_posts(name: str):
 
 async def _run_twitter(handle: str):
     return await scrape_twitter_profile(handle)
+
+
+async def _run_twitter_search(person_name: str):
+    """Search for a person's Twitter/X presence via SerpAPI when no handle is known."""
+    from app.tools.twitter_scraper import _try_serpapi
+    return await _try_serpapi(person_name)
 
 
 async def _run_youtube(query: str):
