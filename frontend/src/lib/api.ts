@@ -189,7 +189,7 @@ export async function createApiKey(name: string, rateLimitPerDay: number) {
 }
 
 export async function revokeApiKey(id: string) {
-  return fetchApi<{ deleted: boolean }>(`/api-keys/${id}`, { method: "DELETE" });
+  return fetchApi<{ revoked: boolean }>(`/api-keys/${id}`, { method: "DELETE" });
 }
 
 // ── Webhooks ──────────────────────────────────────────────────────
