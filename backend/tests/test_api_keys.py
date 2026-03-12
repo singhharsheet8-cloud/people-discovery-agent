@@ -53,7 +53,7 @@ async def test_delete_api_key_revokes(client, admin_token):
 
 
 @pytest.mark.asyncio
-async def test_validate_api_key_returns_none_for_invalid():
+async def test_validate_api_key_returns_none_for_invalid(db_session):
     """validate_api_key returns None for invalid key."""
     result = await validate_api_key("invalid_key_12345")
     assert result is None
