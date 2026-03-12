@@ -24,7 +24,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 const WEBHOOK_EVENTS = ["job.completed", "job.failed", "person.updated"];
 
 function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+  const token = typeof window !== "undefined"
+    ? (localStorage.getItem("access_token") || localStorage.getItem("admin_token"))
+    : null;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
@@ -46,7 +48,7 @@ export default function WebhooksPage() {
     try {
       const res = await fetch(`${API_BASE}/webhooks`, { headers: getAuthHeaders() });
       const data = await res.json();
-      setWebhooks(data);
+      setWebhooks(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -93,7 +95,7 @@ export default function WebhooksPage() {
         headers: getAuthHeaders(),
       });
       const data = await res.json();
-      setDeliveries((prev) => ({ ...prev, [id]: data }));
+      setDeliveries((prev) => ({ ...prev, [id]: Array.isArray(data) ? data : [] }));
       setExpandedId(id);
     } catch (e) {
       console.error(e);

@@ -18,7 +18,9 @@ interface ApiKeyItem {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+  const token = typeof window !== "undefined"
+    ? (localStorage.getItem("access_token") || localStorage.getItem("admin_token"))
+    : null;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
@@ -40,7 +42,7 @@ export default function ApiKeysPage() {
     try {
       const res = await fetch(`${API_BASE}/api-keys`, { headers: getAuthHeaders() });
       const data = await res.json();
-      setKeys(data);
+      setKeys(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
     } finally {
