@@ -1,2 +1,10 @@
 .vercel
 .env*.local
+.env.prod
+.env.vercel
+.env.vercel-check
+
+# Playwright
+e2e-screenshots/
+test-results/
+playwright-report/
