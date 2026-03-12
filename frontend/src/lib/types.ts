@@ -6,6 +6,7 @@ export interface DiscoverRequest {
   linkedin_url: string;
   twitter_handle: string;
   github_username: string;
+  instagram_handle: string;
   context: string;
 }
 

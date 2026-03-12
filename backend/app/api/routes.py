@@ -6,7 +6,7 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Query, HTTPException, Depends, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, desc
@@ -16,6 +16,13 @@ from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersi
 from app.cache import cleanup_expired_cache
 from app.auth import require_admin
 from app.config import get_settings
+from app.intelligence import (
+    analyze_sentiment,
+    map_relationships,
+    calculate_influence_score,
+    generate_meeting_prep,
+    verify_facts,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -31,6 +38,7 @@ class DiscoverRequest(BaseModel):
     linkedin_url: str = Field("", max_length=500)
     twitter_handle: str = Field("", max_length=100)
     github_username: str = Field("", max_length=100)
+    instagram_handle: str = Field("", max_length=100)
     context: str = Field("", max_length=2000)
 
     @field_validator("linkedin_url")
@@ -47,6 +55,15 @@ class DiscoverRequest(BaseModel):
             v = v.lstrip("@")
             if not v.replace("_", "").isalnum():
                 raise ValueError("Twitter handle must contain only alphanumeric characters and underscores")
+        return v
+
+    @field_validator("instagram_handle")
+    @classmethod
+    def validate_instagram_handle(cls, v: str) -> str:
+        if v:
+            v = v.lstrip("@")
+            if not v.replace("_", "").replace(".", "").isalnum():
+                raise ValueError("Instagram handle must contain only alphanumeric characters, underscores, and periods")
         return v
 
     @field_validator("github_username")
@@ -820,6 +837,7 @@ async def re_search_person(person_id: str, _admin=Depends(require_admin)):
             "linkedin_url": social.get("linkedin", ""),
             "twitter_handle": social.get("twitter", ""),
             "github_username": social.get("github", ""),
+            "instagram_handle": social.get("instagram", ""),
             "context": f"Re-search of existing profile. Previous bio: {(person.bio or '')[:200]}",
         }
 
@@ -942,6 +960,164 @@ async def health():
 async def cleanup_cache(_admin=Depends(require_admin)):
     count = await cleanup_expired_cache()
     return {"cleaned": count}
+
+
+# --- Intelligence Endpoints ---
+
+def _person_to_dict_for_intelligence(person: Person, sources: list[PersonSource]) -> dict:
+    """Convert a Person model and its sources to a plain dict for intelligence analysis."""
+    return {
+        "name": person.name,
+        "current_role": person.current_role,
+        "company": person.company,
+        "location": person.location,
+        "bio": person.bio,
+        "key_facts": person.get_json("key_facts") or [],
+        "education": person.get_json("education") or [],
+        "expertise": person.get_json("expertise") or [],
+        "notable_work": person.get_json("notable_work") or [],
+        "career_timeline": person.get_json("career_timeline") or [],
+        "confidence_score": person.confidence_score,
+        "reputation_score": person.reputation_score or 0,
+        "social_links": person.get_json("social_links") or {},
+        "sources": [
+            {
+                "title": s.title,
+                "url": s.url,
+                "platform": s.platform,
+                "source_type": s.source_type,
+                "raw_content": s.raw_content,
+                "source_reliability": s.source_reliability,
+                "relevance_score": s.relevance_score,
+            }
+            for s in sources
+        ],
+    }
+
+
+@router.get("/persons/{person_id}/sentiment")
+async def get_sentiment_analysis(person_id: str, _admin=Depends(require_admin)):
+    """Analyze public sentiment across all sources for a person."""
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_result = await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )
+        sources = sources_result.scalars().all()
+
+        profile = _person_to_dict_for_intelligence(person, sources)
+        result = await analyze_sentiment(profile)
+        return result
+
+
+@router.get("/persons/{person_id}/influence")
+async def get_influence_score(person_id: str, _admin=Depends(require_admin)):
+    """Calculate multi-dimensional influence score for a person."""
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_result = await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )
+        sources = sources_result.scalars().all()
+
+        profile = _person_to_dict_for_intelligence(person, sources)
+        result = await calculate_influence_score(profile)
+        return result
+
+
+@router.post("/persons/relationships")
+async def get_relationship_map(
+    request: dict,
+    _admin=Depends(require_admin),
+):
+    """Map relationships between two persons."""
+    person_a_id = request.get("person_a_id", "")
+    person_b_id = request.get("person_b_id", "")
+    if not person_a_id or not person_b_id:
+        raise HTTPException(status_code=400, detail="person_a_id and person_b_id are required")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        person_a = (await session.execute(
+            select(Person).where(Person.id == person_a_id)
+        )).scalar_one_or_none()
+        person_b = (await session.execute(
+            select(Person).where(Person.id == person_b_id)
+        )).scalar_one_or_none()
+
+        if not person_a or not person_b:
+            raise HTTPException(status_code=404, detail="One or both persons not found")
+
+        sources_a = (await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_a_id)
+        )).scalars().all()
+        sources_b = (await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_b_id)
+        )).scalars().all()
+
+        profile_a = _person_to_dict_for_intelligence(person_a, sources_a)
+        profile_b = _person_to_dict_for_intelligence(person_b, sources_b)
+        result = await map_relationships(profile_a, profile_b)
+        return result
+
+
+@router.post("/persons/{person_id}/meeting-prep")
+async def get_meeting_prep(
+    person_id: str,
+    request: dict | None = Body(None),
+    _admin=Depends(require_admin),
+):
+    """Generate AI-powered meeting preparation insights."""
+    context = (request or {}).get("context", "")
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_result = await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )
+        sources = sources_result.scalars().all()
+
+        profile = _person_to_dict_for_intelligence(person, sources)
+        result = await generate_meeting_prep(profile, context)
+        return result
+
+
+@router.get("/persons/{person_id}/verify")
+async def get_fact_verification(person_id: str, _admin=Depends(require_admin)):
+    """Cross-reference facts from multiple sources and flag inconsistencies."""
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_result = await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )
+        sources = sources_result.scalars().all()
+
+        profile = _person_to_dict_for_intelligence(person, sources)
+        result = await verify_facts(profile)
+        return result
 
 
 def _generate_person_pdf(profile: dict) -> bytes:

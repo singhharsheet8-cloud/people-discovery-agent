@@ -84,6 +84,13 @@ export async function discoverPerson(data: DiscoverRequest) {
   });
 }
 
+export async function batchDiscover(persons: DiscoverRequest[]) {
+  return fetchApi<{ jobs: { job_id: string; name: string; status: string }[]; total: number }>(
+    "/discover/batch",
+    { method: "POST", body: JSON.stringify({ persons }) }
+  );
+}
+
 export async function getJob(jobId: string) {
   return fetchApi<JobSummary>(`/jobs/${jobId}`);
 }
@@ -101,6 +108,10 @@ export async function getPersons(page = 1, perPage = 20, search = "") {
 
 export async function getPerson(id: string) {
   return fetchApi<PersonProfile>(`/persons/${id}`);
+}
+
+export async function suggestPersons(query: string, limit: number = 10) {
+  return fetchApi<PersonSummary[]>(`/suggest?q=${encodeURIComponent(query)}&limit=${limit}`);
 }
 
 export async function updatePerson(id: string, data: Partial<PersonProfile>) {
@@ -138,13 +149,6 @@ export async function loginAdmin(email: string, password: string) {
   });
   storeTokens(data.access_token, data.refresh_token);
   return data;
-}
-
-export async function batchDiscover(persons: DiscoverRequest[]) {
-  return fetchApi<{ jobs: { job_id: string; name: string; status: string }[]; total: number }>(
-    "/discover/batch",
-    { method: "POST", body: JSON.stringify({ persons }) }
-  );
 }
 
 export async function exportPerson(id: string, format: "json" | "csv" | "pdf" = "json") {
@@ -228,4 +232,32 @@ export async function deleteWebhook(id: string) {
 
 export async function getWebhookDeliveries(id: string) {
   return fetchApi<WebhookDelivery[]>(`/webhooks/${id}/deliveries`);
+}
+
+// --- Intelligence APIs ---
+
+export async function getSentimentAnalysis(personId: string) {
+  return fetchApi<Record<string, unknown>>(`/persons/${personId}/sentiment`);
+}
+
+export async function getInfluenceScore(personId: string) {
+  return fetchApi<Record<string, unknown>>(`/persons/${personId}/influence`);
+}
+
+export async function getRelationshipMap(personAId: string, personBId: string) {
+  return fetchApi<Record<string, unknown>>("/persons/relationships", {
+    method: "POST",
+    body: JSON.stringify({ person_a_id: personAId, person_b_id: personBId }),
+  });
+}
+
+export async function getMeetingPrep(personId: string, context?: string) {
+  return fetchApi<Record<string, unknown>>(`/persons/${personId}/meeting-prep`, {
+    method: "POST",
+    body: JSON.stringify({ context: context || "" }),
+  });
+}
+
+export async function getFactVerification(personId: string) {
+  return fetchApi<Record<string, unknown>>(`/persons/${personId}/verify`);
 }

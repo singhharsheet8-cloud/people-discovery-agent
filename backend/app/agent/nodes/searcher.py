@@ -11,6 +11,10 @@ from app.tools.medium_scraper import search_medium_articles
 from app.tools.scholar_search import search_scholar
 from app.tools.firecrawl_extract import batch_extract
 from app.tools.instagram_scraper import scrape_instagram_profile
+from app.tools.google_news_search import search_google_news
+from app.tools.crunchbase_search import search_crunchbase
+from app.tools.patent_search import search_patents
+from app.tools.stackoverflow_search import search_stackoverflow
 
 logger = logging.getLogger(__name__)
 SEARCH_TIMEOUT = 30
@@ -24,6 +28,10 @@ GAP_FILL_PLATFORMS = [
     "linkedin_posts",
     "news",
     "academic",
+    "google_news",
+    "crunchbase_dedicated",
+    "patents",
+    "stackoverflow",
 ]
 
 
@@ -72,6 +80,18 @@ def _build_gap_fill_queries(
         elif platform == "academic":
             extra.append({"query": name, "search_type": "academic",
                           "rationale": "gap-fill: academic papers"})
+        elif platform == "google_news":
+            extra.append({"query": search_term, "search_type": "google_news",
+                          "rationale": "gap-fill: Google News articles"})
+        elif platform == "crunchbase_dedicated":
+            extra.append({"query": search_term, "search_type": "crunchbase_dedicated",
+                          "rationale": "gap-fill: Crunchbase funding & company data"})
+        elif platform == "patents":
+            extra.append({"query": name, "search_type": "patents",
+                          "rationale": "gap-fill: patent filings"})
+        elif platform == "stackoverflow":
+            extra.append({"query": name, "search_type": "stackoverflow",
+                          "rationale": "gap-fill: Stack Overflow activity"})
 
     if "twitter" not in covered and input_data.get("twitter_handle"):
         extra.append({"query": input_data["twitter_handle"],
@@ -132,6 +152,14 @@ async def execute_searches(state: AgentState) -> dict:
             tasks.append(_with_timeout(_run_scholar(query_str)))
         elif search_type == "instagram":
             tasks.append(_with_timeout(_run_instagram(query_str)))
+        elif search_type == "google_news":
+            tasks.append(_with_timeout(_run_google_news(query_str)))
+        elif search_type == "crunchbase_dedicated":
+            tasks.append(_with_timeout(_run_crunchbase(query_str)))
+        elif search_type == "patents":
+            tasks.append(_with_timeout(_run_patents(query_str)))
+        elif search_type == "stackoverflow":
+            tasks.append(_with_timeout(_run_stackoverflow(query_str)))
 
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -216,3 +244,19 @@ async def _run_scholar(query: str):
 
 async def _run_instagram(username: str):
     return await scrape_instagram_profile(username)
+
+
+async def _run_google_news(query: str):
+    return await search_google_news(query)
+
+
+async def _run_crunchbase(query: str):
+    return await search_crunchbase(query)
+
+
+async def _run_patents(name: str):
+    return await search_patents(name)
+
+
+async def _run_stackoverflow(name: str):
+    return await search_stackoverflow(name)

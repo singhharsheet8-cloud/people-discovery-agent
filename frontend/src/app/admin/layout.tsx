@@ -15,6 +15,7 @@ import {
   Menu,
   X,
   Book,
+  Upload,
 } from "lucide-react";
 
 export default function AdminLayout({
@@ -57,6 +58,7 @@ export default function AdminLayout({
     { href: "/admin/costs", label: "Cost Dashboard", icon: DollarSign },
     { href: "/admin/api-keys", label: "API Keys", icon: Key },
     { href: "/admin/webhooks", label: "Webhooks", icon: Webhook },
+    { href: "/admin/batch", label: "Batch Discovery", icon: Upload },
     { href: "/admin/compare", label: "Compare", icon: GitCompare },
     { href: "/admin/docs", label: "API Docs", icon: Book },
   ];

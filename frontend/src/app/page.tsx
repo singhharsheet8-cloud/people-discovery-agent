@@ -31,6 +31,7 @@ const initialForm: DiscoverRequest = {
   linkedin_url: "",
   twitter_handle: "",
   github_username: "",
+  instagram_handle: "",
   context: "",
 };
 
@@ -255,22 +256,42 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    GitHub Username
-                  </label>
-                  <div className="relative">
-                    <Github
-                      size={16}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
-                    />
-                    <input
-                      type="text"
-                      value={form.github_username}
-                      onChange={(e) => updateField("github_username", e.target.value)}
-                      placeholder="username"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50 transition-colors"
-                    />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                      GitHub Username
+                    </label>
+                    <div className="relative">
+                      <Github
+                        size={16}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                      />
+                      <input
+                        type="text"
+                        value={form.github_username}
+                        onChange={(e) => updateField("github_username", e.target.value)}
+                        placeholder="username"
+                        className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50 transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                      Instagram Handle
+                    </label>
+                    <div className="relative">
+                      <User
+                        size={16}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                      />
+                      <input
+                        type="text"
+                        value={form.instagram_handle}
+                        onChange={(e) => updateField("instagram_handle", e.target.value)}
+                        placeholder="@username"
+                        className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50 transition-colors"
+                      />
+                    </div>
                   </div>
                 </div>
 
