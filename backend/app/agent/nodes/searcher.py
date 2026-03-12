@@ -15,10 +15,94 @@ from app.tools.instagram_scraper import scrape_instagram_profile
 logger = logging.getLogger(__name__)
 SEARCH_TIMEOUT = 30
 
+GAP_FILL_PLATFORMS = [
+    "youtube",
+    "github",
+    "reddit",
+    "medium",
+    "scholar",
+    "linkedin_posts",
+    "news",
+    "academic",
+]
+
+
+def _build_gap_fill_queries(
+    planned_queries: list[dict], input_data: dict
+) -> list[dict]:
+    """Inject one query for each cheap/free platform the planner skipped."""
+    covered = {
+        (q.get("search_type", "web") if isinstance(q, dict) else "web")
+        for q in planned_queries
+    }
+    name = input_data.get("name", "")
+    company = input_data.get("company", "")
+    if not name:
+        return []
+
+    search_term = f"{name} {company}".strip() if company else name
+    extra: list[dict] = []
+
+    for platform in GAP_FILL_PLATFORMS:
+        if platform in covered:
+            continue
+        if platform == "linkedin_posts":
+            extra.append({"query": search_term, "search_type": "linkedin_posts",
+                          "rationale": "gap-fill: LinkedIn posts"})
+        elif platform == "youtube":
+            extra.append({"query": f"{search_term} talk interview",
+                          "search_type": "youtube",
+                          "rationale": "gap-fill: YouTube talks"})
+        elif platform == "github":
+            extra.append({"query": input_data.get("github_username", name),
+                          "search_type": "github",
+                          "rationale": "gap-fill: GitHub profile"})
+        elif platform == "reddit":
+            extra.append({"query": search_term, "search_type": "reddit",
+                          "rationale": "gap-fill: Reddit mentions"})
+        elif platform == "medium":
+            extra.append({"query": search_term, "search_type": "medium",
+                          "rationale": "gap-fill: Medium articles"})
+        elif platform == "scholar":
+            extra.append({"query": name, "search_type": "scholar",
+                          "rationale": "gap-fill: Google Scholar"})
+        elif platform == "news":
+            extra.append({"query": search_term, "search_type": "news",
+                          "rationale": "gap-fill: news coverage"})
+        elif platform == "academic":
+            extra.append({"query": name, "search_type": "academic",
+                          "rationale": "gap-fill: academic papers"})
+
+    if "twitter" not in covered and input_data.get("twitter_handle"):
+        extra.append({"query": input_data["twitter_handle"],
+                      "search_type": "twitter",
+                      "rationale": "gap-fill: Twitter handle provided"})
+    if "instagram" not in covered and input_data.get("instagram_handle"):
+        extra.append({"query": input_data["instagram_handle"],
+                      "search_type": "instagram",
+                      "rationale": "gap-fill: Instagram handle provided"})
+    if "linkedin_profile" not in covered and input_data.get("linkedin_url"):
+        extra.append({"query": input_data["linkedin_url"],
+                      "search_type": "linkedin_profile",
+                      "rationale": "gap-fill: LinkedIn URL provided"})
+
+    if extra:
+        logger.info(
+            f"Gap-fill: injecting {len(extra)} queries for platforms "
+            f"{[e['search_type'] for e in extra]}"
+        )
+    return extra
+
 
 async def execute_searches(state: AgentState) -> dict:
     queries = state.get("search_queries", [])
     input_data = state.get("input", {})
+
+    queries = list(queries) + _build_gap_fill_queries(queries, input_data)
+    logger.info(
+        f"Total queries after gap-fill: {len(queries)} — "
+        f"types: {[q.get('search_type','web') if isinstance(q,dict) else 'web' for q in queries]}"
+    )
 
     tasks = []
     for q in queries:
