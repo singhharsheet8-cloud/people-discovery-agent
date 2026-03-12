@@ -14,6 +14,15 @@ import app.db as db_module
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
+def _clear_rate_limits():
+    """Walk the ASGI middleware stack and clear in-memory rate limit counters."""
+    layer = app.middleware_stack
+    while layer is not None:
+        if hasattr(layer, "_requests"):
+            layer._requests.clear()
+        layer = getattr(layer, "app", None)
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     loop = asyncio.new_event_loop()
@@ -47,6 +56,7 @@ async def db_session():
 
 @pytest_asyncio.fixture
 async def client(db_session):
+    _clear_rate_limits()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

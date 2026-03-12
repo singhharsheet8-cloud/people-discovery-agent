@@ -6,7 +6,7 @@ from tests.conftest import auth_headers
 
 
 @pytest.mark.asyncio
-async def test_batch_discover_returns_multiple_jobs(client, db_session):
+async def test_batch_discover_returns_multiple_jobs(client, admin_token, db_session):
     with patch("app.api.routes._run_discovery", new_callable=AsyncMock):
         resp = await client.post(
             "/api/discover/batch",
@@ -16,6 +16,7 @@ async def test_batch_discover_returns_multiple_jobs(client, db_session):
                     {"name": "Person B", "company": "Co B"},
                 ]
             },
+            headers=auth_headers(admin_token),
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -29,15 +30,23 @@ async def test_batch_discover_returns_multiple_jobs(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_batch_discover_rejects_empty_list(client, db_session):
-    resp = await client.post("/api/discover/batch", json={"persons": []})
+async def test_batch_discover_rejects_empty_list(client, admin_token, db_session):
+    resp = await client.post(
+        "/api/discover/batch",
+        json={"persons": []},
+        headers=auth_headers(admin_token),
+    )
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_batch_discover_rejects_over_20(client, db_session):
+async def test_batch_discover_rejects_over_20(client, admin_token, db_session):
     persons = [{"name": f"Person {i}"} for i in range(21)]
-    resp = await client.post("/api/discover/batch", json={"persons": persons})
+    resp = await client.post(
+        "/api/discover/batch",
+        json={"persons": persons},
+        headers=auth_headers(admin_token),
+    )
     assert resp.status_code == 422
 
 

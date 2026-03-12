@@ -15,7 +15,7 @@ interface ApiKeyItem {
   created_at: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 function getAuthHeaders(): Record<string, string> {
   const token = typeof window !== "undefined"

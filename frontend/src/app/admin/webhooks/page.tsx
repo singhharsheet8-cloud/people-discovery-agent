@@ -20,7 +20,7 @@ interface WebhookDelivery {
   created_at: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
 const WEBHOOK_EVENTS = ["job.completed", "job.failed", "person.updated"];
 
 function getAuthHeaders(): Record<string, string> {

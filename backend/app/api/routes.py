@@ -124,7 +124,7 @@ class JobDetail(BaseModel):
 # --- Discovery endpoint ---
 
 @router.post("/discover", response_model=DiscoverResponse)
-async def discover_person(request: DiscoverRequest):
+async def discover_person(request: DiscoverRequest, _admin=Depends(require_admin)):
     """Single-shot person discovery. Returns a job ID for polling."""
     settings = get_settings()
     factory = get_session_factory()
@@ -175,7 +175,7 @@ class BatchDiscoverRequest(BaseModel):
 
 
 @router.post("/discover/batch")
-async def batch_discover(request: BatchDiscoverRequest):
+async def batch_discover(request: BatchDiscoverRequest, _admin=Depends(require_admin)):
     """Start discovery for multiple people. Returns list of job IDs."""
     settings = get_settings()
     factory = get_session_factory()
@@ -669,7 +669,6 @@ async def update_person(person_id: str, update: PersonUpdate, _admin=Depends(req
             setattr(person, key, value)
         person.version += 1
 
-        # Create version record
         version = PersonVersion(
             person_id=person.id,
             version_number=person.version,
@@ -680,7 +679,39 @@ async def update_person(person_id: str, update: PersonUpdate, _admin=Depends(req
         session.add(version)
         await session.commit()
 
-        return _person_to_dict(person)
+        result = _person_to_dict(person)
+        sources = (await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+            .order_by(PersonSource.relevance_score.desc())
+        )).scalars().all()
+        jobs = (await session.execute(
+            select(DiscoveryJob).where(DiscoveryJob.person_id == person_id)
+            .order_by(DiscoveryJob.created_at.desc())
+        )).scalars().all()
+        result["sources"] = [
+            {
+                "id": s.id, "source_type": s.source_type, "platform": s.platform,
+                "url": s.url, "title": s.title,
+                "raw_content": s.raw_content[:2000] if s.raw_content else None,
+                "structured_data": json.loads(s.structured_data) if s.structured_data else None,
+                "confidence": round(max(s.relevance_score or 0, s.source_reliability or 0), 2),
+                "relevance_score": s.relevance_score,
+                "source_reliability": s.source_reliability,
+                "fetched_at": s.fetched_at.isoformat() if s.fetched_at else "",
+            }
+            for s in sources
+        ]
+        result["jobs"] = [
+            {
+                "id": j.id, "status": j.status, "total_cost": j.total_cost,
+                "latency_ms": j.latency_ms, "sources_hit": j.sources_hit,
+                "cache_hits": j.cache_hits,
+                "created_at": j.created_at.isoformat() if j.created_at else "",
+                "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            }
+            for j in jobs
+        ]
+        return result
 
 
 @router.delete("/persons/{person_id}")

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Book, Copy, Check, ChevronDown, ChevronRight } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 interface Endpoint {
   method: string;

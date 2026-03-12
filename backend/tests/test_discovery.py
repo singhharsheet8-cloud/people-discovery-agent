@@ -13,7 +13,7 @@ async def _noop_discovery(*args, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_post_discover_valid_returns_job_id(client):
+async def test_post_discover_valid_returns_job_id(client, admin_token):
     """POST /api/discover with valid request returns job_id and running status."""
     with patch("app.api.routes._run_discovery", side_effect=_noop_discovery):
         resp = await client.post(
@@ -28,16 +28,36 @@ async def test_post_discover_valid_returns_job_id(client):
                 "github_username": "",
                 "context": "",
             },
+            headers=auth_headers(admin_token),
         )
     assert resp.status_code == 200
     data = resp.json()
     assert "job_id" in data
     assert data["status"] == "running"
-    uuid.UUID(data["job_id"])  # Valid UUID
+    uuid.UUID(data["job_id"])
 
 
 @pytest.mark.asyncio
-async def test_post_discover_empty_name_returns_422(client):
+async def test_post_discover_requires_auth(client, db_session):
+    """POST /api/discover without auth returns 401."""
+    resp = await client.post(
+        "/api/discover",
+        json={
+            "name": "Jane Doe",
+            "company": "",
+            "role": "",
+            "location": "",
+            "linkedin_url": "",
+            "twitter_handle": "",
+            "github_username": "",
+            "context": "",
+        },
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_post_discover_empty_name_returns_422(client, admin_token):
     """POST /api/discover with empty name returns 422."""
     resp = await client.post(
         "/api/discover",
@@ -51,12 +71,13 @@ async def test_post_discover_empty_name_returns_422(client):
             "github_username": "",
             "context": "",
         },
+        headers=auth_headers(admin_token),
     )
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_post_discover_invalid_linkedin_url_returns_422(client):
+async def test_post_discover_invalid_linkedin_url_returns_422(client, admin_token):
     """POST /api/discover with invalid linkedin_url returns 422."""
     resp = await client.post(
         "/api/discover",
@@ -70,12 +91,13 @@ async def test_post_discover_invalid_linkedin_url_returns_422(client):
             "github_username": "",
             "context": "",
         },
+        headers=auth_headers(admin_token),
     )
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_post_discover_invalid_twitter_handle_returns_422(client):
+async def test_post_discover_invalid_twitter_handle_returns_422(client, admin_token):
     """POST /api/discover with invalid twitter handle returns 422."""
     resp = await client.post(
         "/api/discover",
@@ -89,6 +111,7 @@ async def test_post_discover_invalid_twitter_handle_returns_422(client):
             "github_username": "",
             "context": "",
         },
+        headers=auth_headers(admin_token),
     )
     assert resp.status_code == 422
 
