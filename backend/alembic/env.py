@@ -20,13 +20,17 @@ if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 
 from app.db import Base
-from app.models.db_models import (
+from app.models.db_models import (  # noqa: F401 — ensure all models are registered
     Person,
     PersonSource,
     SearchCache,
     DiscoveryJob,
     PersonVersion,
     AdminUser,
+    WebhookEndpoint,
+    WebhookDelivery,
+    ApiKey,
+    ApiUsageLog,
 )
 
 target_metadata = Base.metadata

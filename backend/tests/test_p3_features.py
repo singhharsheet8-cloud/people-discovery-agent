@@ -104,6 +104,30 @@ async def test_export_person_csv(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_export_person_pdf(client, db_session):
+    from app.models.db_models import Person
+    from app.db import get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as session:
+        person = Person(
+            id="00000000-0000-0000-0000-000000000097",
+            name="PDF Export Test",
+            current_role="Engineer",
+            company="PdfCo",
+            bio="PDF generation test person",
+            confidence_score=0.85,
+        )
+        session.add(person)
+        await session.commit()
+
+    resp = await client.get("/api/persons/00000000-0000-0000-0000-000000000097/export?format=pdf")
+    assert resp.status_code == 200
+    assert "application/pdf" in resp.headers.get("content-type", "")
+    assert resp.content[:5] == b"%PDF-"
+
+
+@pytest.mark.asyncio
 async def test_token_refresh_valid(client, admin_token, db_session):
     login_resp = await client.post(
         "/api/auth/login",

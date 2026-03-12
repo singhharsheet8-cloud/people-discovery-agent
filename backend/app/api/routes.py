@@ -551,8 +551,8 @@ async def delete_person(person_id: str, _admin=Depends(require_admin)):
 
 
 @router.get("/persons/{person_id}/export")
-async def export_person(person_id: str, format: str = Query("json", pattern="^(json|csv)$")):
-    """Export person profile as JSON or CSV."""
+async def export_person(person_id: str, format: str = Query("json", pattern="^(json|csv|pdf)$")):
+    """Export person profile as JSON, CSV, or PDF."""
     _validate_uuid(person_id, "person_id")
     factory = get_session_factory()
     async with factory() as session:
@@ -578,6 +578,16 @@ async def export_person(person_id: str, format: str = Query("json", pattern="^(j
             for s in sources
         ]
 
+    safe_name = profile.get("name", "export").replace(" ", "_")
+
+    if format == "pdf":
+        pdf_bytes = _generate_person_pdf(profile)
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_profile.pdf"'},
+        )
+
     if format == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
@@ -590,18 +600,15 @@ async def export_person(person_id: str, format: str = Query("json", pattern="^(j
             writer.writerow([s.get("platform", ""), s.get("url", ""), s.get("title", ""), s.get("confidence", "")])
 
         output.seek(0)
-        filename = f"{profile.get('name', 'export').replace(' ', '_')}_profile.csv"
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_profile.csv"'},
         )
 
-    # JSON export
-    filename = f"{profile.get('name', 'export').replace(' ', '_')}_profile.json"
     return JSONResponse(
         content=profile,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_profile.json"'},
     )
 
 
@@ -750,6 +757,134 @@ async def health():
 async def cleanup_cache(_admin=Depends(require_admin)):
     count = await cleanup_expired_cache()
     return {"cleaned": count}
+
+
+def _generate_person_pdf(profile: dict) -> bytes:
+    """Generate a styled PDF report for a person profile."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(0, 12, profile.get("name", "Unknown"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(41, 128, 185)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(4)
+
+    # Subtitle: role + company
+    role_parts = [profile.get("current_role"), profile.get("company")]
+    subtitle = " at ".join(p for p in role_parts if p)
+    if subtitle:
+        pdf.set_font("Helvetica", "I", 12)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 8, subtitle, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+
+    # Metadata row
+    meta_items = []
+    if profile.get("location"):
+        meta_items.append(f"Location: {profile['location']}")
+    meta_items.append(f"Confidence: {round((profile.get('confidence_score') or 0) * 100)}%")
+    if profile.get("reputation_score") is not None:
+        meta_items.append(f"Reputation: {round(profile['reputation_score'] * 100)}%")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 6, "  |  ".join(meta_items), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    def _section(title: str):
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(41, 128, 185)
+        pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+
+    def _body(text: str):
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 5, text)
+        pdf.ln(2)
+
+    def _bullet_list(items: list):
+        pdf.set_font("Helvetica", "", 10)
+        for item in items:
+            label = str(item) if isinstance(item, str) else json.dumps(item) if isinstance(item, dict) else str(item)
+            pdf.cell(6, 5, chr(8226))
+            pdf.multi_cell(0, 5, label[:200])
+
+    if profile.get("bio"):
+        _section("Bio")
+        _body(profile["bio"])
+
+    if profile.get("expertise"):
+        _section("Expertise")
+        _bullet_list(profile["expertise"])
+        pdf.ln(2)
+
+    if profile.get("key_facts"):
+        _section("Key Facts")
+        _bullet_list(profile["key_facts"])
+        pdf.ln(2)
+
+    if profile.get("education"):
+        _section("Education")
+        for edu in profile["education"]:
+            if isinstance(edu, dict):
+                parts = [edu.get("degree", ""), edu.get("institution", ""), edu.get("year", "")]
+                _body(" - ".join(str(p) for p in parts if p))
+            else:
+                _body(str(edu))
+
+    if profile.get("career_timeline"):
+        _section("Career Timeline")
+        for entry in profile["career_timeline"]:
+            if isinstance(entry, dict):
+                period = entry.get("period", entry.get("year", ""))
+                role = entry.get("role", entry.get("title", ""))
+                org = entry.get("company", entry.get("organization", ""))
+                line = f"{period}: {role}"
+                if org:
+                    line += f" at {org}"
+                _body(line)
+            else:
+                _body(str(entry))
+
+    if profile.get("notable_work"):
+        _section("Notable Work")
+        _bullet_list(profile["notable_work"])
+        pdf.ln(2)
+
+    if profile.get("social_links"):
+        _section("Social Links")
+        pdf.set_font("Helvetica", "", 10)
+        for platform, url in profile["social_links"].items():
+            if url:
+                pdf.cell(0, 5, f"{platform}: {url}", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+    if profile.get("sources"):
+        _section("Sources")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(35, 6, "Platform")
+        pdf.cell(100, 6, "Title")
+        pdf.cell(25, 6, "Confidence", align="R")
+        pdf.ln()
+        pdf.set_font("Helvetica", "", 9)
+        for s in profile["sources"][:30]:
+            pdf.cell(35, 5, str(s.get("platform", ""))[:20])
+            pdf.cell(100, 5, str(s.get("title", ""))[:60])
+            pdf.cell(25, 5, f"{round((s.get('confidence', 0)) * 100)}%", align="R")
+            pdf.ln()
+
+    # Footer
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 5, f"Generated by People Discovery Agent | Version {profile.get('version', 1)}", align="C")
+
+    return pdf.output()
 
 
 def _person_to_dict(person: Person) -> dict:
