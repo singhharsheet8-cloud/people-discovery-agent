@@ -190,28 +190,32 @@ async def _run_discovery(job_id: str, input_data: dict):
             session.add(person)
             await session.flush()
 
-            # Store sources
+            synthesized_urls = set()
             for source in profile.get("sources", []):
+                url = source.get("url", "")
+                synthesized_urls.add(url)
                 ps = PersonSource(
                     person_id=person.id,
                     source_type=source.get("platform", "web"),
                     platform=source.get("platform", "web"),
-                    url=source.get("url", ""),
+                    url=url,
                     title=source.get("title", ""),
                     raw_content=source.get("snippet", ""),
-                    relevance_score=source.get("relevance_score", 0.5),
-                    source_reliability=_get_source_reliability(source.get("platform", "web")),
+                    relevance_score=source.get("relevance_score", source.get("confidence", 0.5)),
+                    source_reliability=source.get("confidence", _get_source_reliability(source.get("platform", "web"))),
                 )
                 session.add(ps)
 
-            # Also store raw search results as sources
             for sr in result.get("search_results", []):
                 if isinstance(sr, dict):
+                    url = sr.get("url", "")
+                    if url in synthesized_urls:
+                        continue
                     ps = PersonSource(
                         person_id=person.id,
                         source_type=sr.get("source_type", "web"),
                         platform=sr.get("source_type", "web"),
-                        url=sr.get("url", ""),
+                        url=url,
                         title=sr.get("title", ""),
                         raw_content=sr.get("content", "")[:5000],
                         structured_data=json.dumps(sr.get("structured")) if sr.get("structured") else None,
@@ -384,8 +388,9 @@ async def get_person(person_id: str):
                 "platform": s.platform,
                 "url": s.url,
                 "title": s.title,
-                "raw_content": s.raw_content[:1000] if s.raw_content else None,
+                "raw_content": s.raw_content[:2000] if s.raw_content else None,
                 "structured_data": json.loads(s.structured_data) if s.structured_data else None,
+                "confidence": round(max(s.relevance_score or 0, s.source_reliability or 0), 2),
                 "relevance_score": s.relevance_score,
                 "source_reliability": s.source_reliability,
                 "fetched_at": s.fetched_at.isoformat() if s.fetched_at else "",

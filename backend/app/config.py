@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     confidence_threshold: float = 0.75
-    max_search_queries: int = 6
+    max_search_queries: int = 12
     max_concurrent_jobs: int = 5
     max_daily_discoveries: int = 100
 

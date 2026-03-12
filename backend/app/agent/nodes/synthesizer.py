@@ -13,42 +13,61 @@ async def _invoke_synthesizer(llm, messages):
     return await llm.ainvoke(messages)
 
 
-SYNTHESIZER_SYSTEM_PROMPT = """You are an elite research analyst creating a comprehensive person profile.
-Synthesize ALL available information into an accurate, detailed, well-structured profile.
+SYNTHESIZER_SYSTEM_PROMPT = """You are an elite intelligence analyst producing the most comprehensive person dossier possible.
+Synthesize ALL available information into a richly detailed, well-structured profile.
 
 INSTRUCTIONS:
 1. Cross-reference facts across multiple sources for accuracy
 2. Prioritize recent information over older data
-3. Extract ALL available details — roles, companies, education, achievements, publications, talks
+3. Extract EVERY available detail — roles, companies, education, achievements, publications, talks, investments, board seats
 4. Include direct URLs when available (LinkedIn, GitHub, Twitter, YouTube channels)
-5. Write a compelling bio that captures the person's professional identity
-6. For sources, include a brief relevant excerpt as the snippet
+5. Write a comprehensive, detailed bio (see instructions below)
+6. For each source, rate its confidence (0.0-1.0) based on source authority and corroboration
 7. Do NOT fabricate information — only use what is supported by the sources
 8. Fill in EVERY field possible from the available data
+
+BIO INSTRUCTIONS — THIS IS THE MOST IMPORTANT FIELD:
+Write a comprehensive 400-600 word profile covering ALL of the following sections:
+- **Background & Early Career**: Origins, education, early career steps
+- **Current Role & Responsibilities**: What they do now, their scope of influence
+- **Key Achievements**: Major milestones, transformations, products launched, deals closed
+- **Leadership & Philosophy**: Management style, public statements, cultural impact
+- **Industry Impact**: How they've shaped their industry, thought leadership
+- **Recent Activity**: Latest news, initiatives, public appearances (from 2024-2026)
+- **Personal**: Any known personal details — books authored, philanthropy, hobbies, family (only if publicly available)
+
+Write in third person, authoritative tone. Use specific numbers, dates, and facts from the sources.
+Do NOT use bullet points in the bio — write flowing paragraphs.
 
 Respond with valid JSON matching this schema:
 {
   "name": "Full Legal Name",
-  "current_role": "Current Job Title (be specific)",
+  "current_role": "Current Job Title (be very specific, include all titles)",
   "company": "Current Company/Organization",
   "location": "City, State/Country",
-  "bio": "3-4 sentence professional summary capturing who they are, their impact, and what they're known for",
+  "bio": "400-600 word comprehensive profile (see instructions above)",
   "linkedin_url": "Direct LinkedIn profile URL or null",
-  "key_facts": ["5-8 important facts about this person, ordered by significance"],
+  "key_facts": ["10-15 important facts about this person, ordered by significance, with specific data points"],
   "education": ["Degree in Field, University (Year if known)"],
-  "expertise": ["Specific domain expertise areas (5-10 items)"],
-  "notable_work": ["Significant achievements, publications, projects, or companies founded"],
+  "expertise": ["Specific domain expertise areas (8-12 items)"],
+  "notable_work": ["Significant achievements, publications, projects, or companies (8-12 items with context)"],
   "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],
-  "reputation_score": 0.0,
-  "social_links": {"linkedin": "url", "twitter": "url", "github": "url"},
+  "reputation_score": 0.0-1.0,
+  "social_links": {"linkedin": "url", "twitter": "url", "github": "url", "website": "url"},
   "sources": [
-    {"title": "Source title", "url": "URL", "platform": "linkedin|youtube|github|twitter|news|web", "snippet": "Key information found here", "relevance_score": 0.0-1.0}
+    {
+      "title": "Source title",
+      "url": "URL",
+      "platform": "linkedin|youtube|github|twitter|reddit|medium|scholar|news|web",
+      "snippet": "Key information extracted from this source (2-3 sentences)",
+      "relevance_score": 0.0-1.0,
+      "confidence": 0.0-1.0
+    }
   ]
 }"""
 
 
 def _format_input_for_prompt(input_data: dict) -> str:
-    """Format DiscoveryInput for the synthesizer prompt."""
     parts = []
     if input_data.get("name"):
         parts.append(f"Name: {input_data['name']}")
@@ -61,6 +80,12 @@ def _format_input_for_prompt(input_data: dict) -> str:
     if input_data.get("context"):
         parts.append(f"Context: {input_data['context']}")
     return "\n".join(parts) if parts else "Unknown"
+
+
+def _truncate_source(content: str, max_chars: int = 1200) -> str:
+    if not content:
+        return ""
+    return content[:max_chars]
 
 
 async def synthesize_profile(state: AgentState) -> dict:
@@ -79,29 +104,38 @@ async def synthesize_profile(state: AgentState) -> dict:
         sources_text.append(
             f"[Source {i}] ({r.get('source_type', 'web')}) {r.get('title', '')}\n"
             f"URL: {r.get('url', '')}\n"
-            f"Content: {r.get('content', '')[:800]}"
+            f"Content: {_truncate_source(r.get('content', ''))}"
         )
 
     analysis_text = ""
     if best_idx >= 0 and people:
-        analysis_text = f"Pre-analysis:\n{json.dumps(people[best_idx], indent=2)}"
+        analysis_text = f"Pre-analysis of best match:\n{json.dumps(people[best_idx], indent=2)}"
 
     career_timeline_str = ""
     timeline = enrichment.get("career_timeline", [])
     if timeline:
         career_timeline_str = f"\nCareer timeline (from enrichment):\n{json.dumps(timeline, indent=2)}"
 
+    deduped_facts = enrichment.get("deduplicated_facts", [])
+    facts_str = ""
+    if deduped_facts:
+        facts_str = f"\nVerified facts:\n" + "\n".join(f"- {f}" for f in deduped_facts)
+
     input_str = _format_input_for_prompt(input_data)
 
-    user_prompt = f"""Create a comprehensive profile for: {input_str}
+    all_sources_str = "\n\n".join(sources_text)
+
+    user_prompt = f"""Create the most comprehensive profile possible for:
+{input_str}
 
 {analysis_text}
 {career_timeline_str}
+{facts_str}
 
-Sources ({len(sources_text)} total):
-{chr(10).join(sources_text[:15])}
+ALL Sources ({len(sources_text)} total):
+{all_sources_str}
 
-Synthesize the most accurate and complete profile from these sources. Fill in every field you can. Include career_timeline and reputation_score (0.0-1.0 based on source diversity and cross-referencing)."""
+IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, leadership, industry impact, and recent activity. Use specific facts, numbers, and dates from the sources. Every field should be as complete as possible. Rate each source's confidence based on how authoritative and relevant it is."""
 
     response = await _invoke_synthesizer(llm, [
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
@@ -119,7 +153,7 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
     except (json.JSONDecodeError, IndexError) as e:
         logger.error(f"Failed to parse synthesis response: {e}")
         logger.error(f"Raw response (first 500 chars): {response.content[:500]}")
-        profile = _build_fallback_profile(state, analysis)
+        profile = _build_fallback_profile(state, analysis, enrichment)
 
     profile["confidence_score"] = state.get("confidence_score", 0)
 
@@ -129,7 +163,7 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
     if "career_timeline" not in profile and timeline:
         profile["career_timeline"] = timeline
 
-    logger.info(f"Synthesized profile for: {profile.get('name', 'Unknown')}")
+    logger.info(f"Synthesized profile for: {profile.get('name', 'Unknown')} (bio: {len(profile.get('bio',''))} chars)")
 
     return {
         "person_profile": profile,
@@ -137,11 +171,10 @@ Synthesize the most accurate and complete profile from these sources. Fill in ev
     }
 
 
-def _build_fallback_profile(state: AgentState, analysis: dict) -> dict:
+def _build_fallback_profile(state: AgentState, analysis: dict, enrichment: dict) -> dict:
     people = analysis.get("identified_people", [])
     best = people[0] if people else {}
     input_data = state.get("input", {})
-    enrichment = state.get("enrichment", {})
 
     return {
         "name": best.get("name", input_data.get("name", "Unknown")),
