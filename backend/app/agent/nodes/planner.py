@@ -85,10 +85,13 @@ Previous search results: {len(state.get("search_results", []))} results from pla
 
 Generate 8-10 targeted search queries across all relevant platforms. Use direct URLs/handles when provided. Cast a wide net."""
 
-    response = await invoke_llm_with_fallback([
+    response, usage = await invoke_llm_with_fallback([
         SystemMessage(content=PLANNER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ], label="planner", max_tokens=1024)
+
+    cost_tracker = dict(state.get("cost_tracker", {}))
+    cost_tracker["planner"] = usage
 
     try:
         plan = json.loads(response.content)
@@ -111,6 +114,6 @@ Generate 8-10 targeted search queries across all relevant platforms. Use direct 
     logger.info(f"Planned {len(queries)} search queries across types: {[q.get('search_type') for q in queries]}")
     return {
         "search_queries": queries,
-        "cost_tracker": state.get("cost_tracker", {}),
+        "cost_tracker": cost_tracker,
         "status": "planning_complete",
     }

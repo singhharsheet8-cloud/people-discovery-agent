@@ -12,7 +12,7 @@ import {
   Building2,
   Briefcase,
 } from "lucide-react";
-import { getPerson, deletePerson, reSearchPerson } from "@/lib/api";
+import { getPerson, deletePerson, reSearchPerson, getJob } from "@/lib/api";
 import type { PersonProfile, PersonSource } from "@/lib/types";
 import { confidenceColor, confidenceLabel } from "@/lib/utils";
 
@@ -75,10 +75,20 @@ export default function PersonDetailPage() {
     setReSearching(true);
     try {
       const res = await reSearchPerson(id);
-      await getPerson(id);
-      setReSearching(false);
-      router.push(`/admin?job=${res.job_id}`);
+      const pollInterval = 3000;
+      const maxPolls = 60;
+      for (let i = 0; i < maxPolls; i++) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+        const job = await getJob(res.job_id);
+        if (job.status === "completed" || job.status === "failed") break;
+      }
+      const updated = await getPerson(id);
+      setPerson(updated);
+      const groups = groupSourcesByPlatform(updated.sources || []);
+      setSourceTab(Object.keys(groups)[0] || null);
     } catch {
+      // ignore
+    } finally {
       setReSearching(false);
     }
   };
@@ -218,7 +228,8 @@ export default function PersonDetailPage() {
                   <ExternalLink size={12} />
                 </a>
                 <p className="text-sm text-gray-500 mt-1">
-                  Relevance: {Math.round((s.relevance_score || 0) * 100)}%
+                  Confidence: {Math.round((s.confidence || s.relevance_score || 0) * 100)}%
+                  {s.platform && <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-500">{s.platform}</span>}
                 </p>
                 {s.raw_content && (
                   <p className="text-sm text-gray-400 mt-2 line-clamp-3">

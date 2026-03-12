@@ -1,10 +1,13 @@
 import json
+import hashlib
+import hmac
 import logging
 import asyncio
 import httpx
 import uuid
+import time
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from app.db import get_session_factory
 from app.models.db_models import WebhookEndpoint, WebhookDelivery
@@ -18,6 +21,13 @@ class WebhookCreate(BaseModel):
     url: str = Field(..., min_length=10, max_length=2000)
     secret: str | None = Field(None, max_length=255)
     events: list[str] = ["job.completed"]
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("Webhook URL must start with https:// or http://")
+        return v
 
 
 class WebhookResponse(BaseModel):
@@ -105,25 +115,44 @@ async def get_deliveries(webhook_id: str, _admin=Depends(require_admin)):
         ]
 
 
+def _sign_payload(body: str, secret: str) -> str:
+    """Generate HMAC-SHA256 signature for webhook payload."""
+    timestamp = str(int(time.time()))
+    signed_content = f"{timestamp}.{body}"
+    signature = hmac.new(secret.encode(), signed_content.encode(), hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={signature}"
+
+
 async def fire_webhooks(event: str, payload: dict):
     """Fire webhooks for a given event. Called after discovery completes."""
-    factory = get_session_factory()
-    async with factory() as session:
-        result = await session.execute(
-            select(WebhookEndpoint).where(WebhookEndpoint.active == True)
-        )
-        endpoints = result.scalars().all()
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(WebhookEndpoint).where(WebhookEndpoint.active == True)
+            )
+            endpoints = result.scalars().all()
 
-    for endpoint in endpoints:
-        events = json.loads(endpoint.events)
-        if event in events:
-            asyncio.create_task(_deliver_webhook(endpoint.id, endpoint.url, event, payload))
+        for endpoint in endpoints:
+            events = json.loads(endpoint.events)
+            if event in events:
+                asyncio.create_task(
+                    _deliver_webhook(endpoint.id, endpoint.url, endpoint.secret, event, payload)
+                )
+    except Exception as e:
+        logger.error(f"fire_webhooks error: {e}")
 
 
-async def _deliver_webhook(endpoint_id: str, url: str, event: str, payload: dict, max_attempts: int = 3):
-    """Deliver webhook with exponential backoff retry."""
+async def _deliver_webhook(
+    endpoint_id: str, url: str, secret: str | None, event: str, payload: dict, max_attempts: int = 3
+):
+    """Deliver webhook with HMAC signing and exponential backoff retry."""
     factory = get_session_factory()
     body = json.dumps({"event": event, "data": payload})
+
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers["X-Webhook-Signature"] = _sign_payload(body, secret)
 
     for attempt in range(1, max_attempts + 1):
         delivery_id = str(uuid.uuid4())
@@ -133,7 +162,7 @@ async def _deliver_webhook(endpoint_id: str, url: str, event: str, payload: dict
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, content=body, headers={"Content-Type": "application/json"})
+                resp = await client.post(url, content=body, headers=headers)
                 status_code = resp.status_code
                 response_body = resp.text[:500]
                 success = 200 <= resp.status_code < 300

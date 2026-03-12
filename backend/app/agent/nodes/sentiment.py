@@ -1,5 +1,6 @@
 import json
 import logging
+from app.agent.state import AgentState
 from app.utils import invoke_llm_with_fallback
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -23,15 +24,16 @@ Respond with valid JSON:
 }"""
 
 
-async def analyze_sentiment(sources: list[dict]) -> dict:
-    """Analyze sentiment from person's online sources."""
-    if not sources:
-        return {"reputation_score": None, "key_themes": [], "source_sentiments": [], "summary": ""}
+async def analyze_sentiment(state: AgentState) -> dict:
+    """LangGraph node: analyze sentiment from search results."""
+    results = state.get("search_results", [])
+    if not results:
+        return {"sentiment": {}, "status": "sentiment_complete"}
 
-    content_by_source = {}
-    for s in sources:
-        platform = s.get("platform", s.get("source_type", "web"))
-        text = s.get("raw_content", s.get("content", ""))[:500]
+    content_by_source: dict[str, list[str]] = {}
+    for s in results:
+        platform = s.get("source_type", "web")
+        text = s.get("content", "")[:500]
         if text:
             content_by_source.setdefault(platform, []).append(text)
 
@@ -40,16 +42,26 @@ async def analyze_sentiment(sources: list[dict]) -> dict:
         combined = "\n".join(texts[:5])[:1000]
         source_texts.append(f"[{platform}]\n{combined}")
 
+    if not source_texts:
+        return {"sentiment": {}, "status": "sentiment_complete"}
+
     user_prompt = f"Analyze the following content from various sources about a person:\n\n{'---'.join(source_texts[:10])}"
 
     try:
-        response = await invoke_llm_with_fallback([
+        response, usage = await invoke_llm_with_fallback([
             SystemMessage(content=SENTIMENT_PROMPT),
             HumanMessage(content=user_prompt),
         ], label="sentiment", max_tokens=1024)
 
+        cost_tracker = dict(state.get("cost_tracker", {}))
+        cost_tracker["sentiment"] = usage
+
         result = json.loads(response.content)
-        return result
+        return {
+            "sentiment": result,
+            "cost_tracker": cost_tracker,
+            "status": "sentiment_complete",
+        }
     except Exception as e:
         logger.error(f"Sentiment analysis failed: {e}")
-        return {"reputation_score": None, "key_themes": [], "source_sentiments": [], "summary": ""}
+        return {"sentiment": {}, "status": "sentiment_complete"}

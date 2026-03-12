@@ -36,7 +36,9 @@ def _extract_career_timeline(analysis: dict, results: list[dict]) -> list[dict]:
     if not people:
         return timeline
 
-    best = people[0]
+    best_idx = analysis.get("best_match_index", 0)
+    best_idx = max(0, min(best_idx, len(people) - 1))
+    best = people[best_idx]
 
     for edu in best.get("education", []):
         timeline.append({"type": "education", "description": edu, "order": 0})
@@ -87,7 +89,9 @@ def _deduplicate_facts(analysis: dict) -> list[str]:
     if not people:
         return []
 
-    best = people[0]
+    best_idx = analysis.get("best_match_index", 0)
+    best_idx = max(0, min(best_idx, len(people) - 1))
+    best = people[best_idx]
     all_facts = best.get("key_facts", [])
 
     seen = set()

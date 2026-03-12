@@ -44,4 +44,3 @@ data/
 .cursor/
 .vercel
 .env*.local
-.github/workflows/ci.yml

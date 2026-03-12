@@ -98,7 +98,7 @@ class DiscoveryJob(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     person_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("persons.id"), nullable=True, index=True)
     input_params: Mapped[str] = mapped_column(Text)  # JSON
-    status: Mapped[str] = mapped_column(String(50), default="queued")
+    status: Mapped[str] = mapped_column(String(50), default="queued", index=True)
     cost_breakdown: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     total_cost: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)

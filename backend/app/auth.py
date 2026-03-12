@@ -15,13 +15,19 @@ ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
 
+_auto_generated_key: str | None = None
+
+
 def _get_secret_key() -> str:
+    global _auto_generated_key
     key = get_settings().jwt_secret_key
-    if not key:
-        logger.warning("JWT_SECRET_KEY not set — using auto-generated key (tokens won't survive restarts)")
-        key = secrets.token_urlsafe(48)
-        get_settings().jwt_secret_key = key
-    return key
+    if key:
+        return key
+    if _auto_generated_key:
+        return _auto_generated_key
+    logger.warning("JWT_SECRET_KEY not set — using auto-generated key (tokens won't survive restarts)")
+    _auto_generated_key = secrets.token_urlsafe(48)
+    return _auto_generated_key
 
 
 async def verify_admin(email: str, password: str) -> AdminUser | None:

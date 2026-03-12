@@ -1,16 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Zap, Mail, Lock, Loader2 } from "lucide-react";
 import { loginAdmin } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [expired, setExpired] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("expired") === "1") {
+      setExpired(true);
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +45,12 @@ export default function LoginPage() {
             </div>
             <span className="text-lg font-bold text-white">Admin Login</span>
           </div>
+
+          {expired && (
+            <p className="text-sm text-yellow-400 bg-yellow-500/10 rounded-lg px-4 py-2 mb-4">
+              Your session has expired. Please sign in again.
+            </p>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>

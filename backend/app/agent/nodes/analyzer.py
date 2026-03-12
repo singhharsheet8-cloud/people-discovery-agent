@@ -78,10 +78,13 @@ Search results ({len(results_summary)} total):
 
 Analyze these results and identify the person(s) they refer to."""
 
-    response = await invoke_llm_with_fallback([
+    response, usage = await invoke_llm_with_fallback([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ], label="analyzer", max_tokens=4096)
+
+    cost_tracker = dict(state.get("cost_tracker", {}))
+    cost_tracker["analyzer"] = usage
 
     try:
         analysis = json.loads(response.content)
@@ -108,5 +111,6 @@ Analyze these results and identify the person(s) they refer to."""
     return {
         "analyzed_results": analysis,
         "confidence_score": confidence_score,
+        "cost_tracker": cost_tracker,
         "status": "analysis_complete",
     }

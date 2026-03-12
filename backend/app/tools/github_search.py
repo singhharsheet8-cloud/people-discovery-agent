@@ -1,6 +1,7 @@
 import logging
-import httpx
+
 from app.config import get_settings
+from app.utils import resilient_request
 from app.models.search import SearchResult
 from app.cache import get_cached_results, set_cached_results
 
@@ -24,14 +25,15 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
         return [SearchResult(**r) for r in cached]
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{GITHUB_API}/search/users",
-                params={"q": query, "per_page": max_results},
-                headers=_github_headers(),
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await resilient_request(
+            "get",
+            f"{GITHUB_API}/search/users",
+            params={"q": query, "per_page": max_results},
+            headers=_github_headers(),
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         import asyncio
         users = data.get("items", [])[:max_results]
@@ -79,12 +81,13 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
 async def _get_user_profile(username: str) -> dict:
     """Fetch detailed GitHub user profile."""
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get(
-                f"{GITHUB_API}/users/{username}",
-                headers=_github_headers(),
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await resilient_request(
+            "get",
+            f"{GITHUB_API}/users/{username}",
+            headers=_github_headers(),
+            timeout=8.0,
+        )
+        response.raise_for_status()
+        return response.json()
     except Exception:
         return {}

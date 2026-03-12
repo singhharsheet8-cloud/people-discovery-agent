@@ -29,6 +29,29 @@ class DiscoverRequest(BaseModel):
     github_username: str = Field("", max_length=100)
     context: str = Field("", max_length=2000)
 
+    @field_validator("linkedin_url")
+    @classmethod
+    def validate_linkedin_url(cls, v: str) -> str:
+        if v and not v.startswith(("https://linkedin.com/", "https://www.linkedin.com/", "http://linkedin.com/", "http://www.linkedin.com/")):
+            raise ValueError("LinkedIn URL must start with https://linkedin.com/ or https://www.linkedin.com/")
+        return v
+
+    @field_validator("twitter_handle")
+    @classmethod
+    def validate_twitter_handle(cls, v: str) -> str:
+        if v:
+            v = v.lstrip("@")
+            if not v.replace("_", "").isalnum():
+                raise ValueError("Twitter handle must contain only alphanumeric characters and underscores")
+        return v
+
+    @field_validator("github_username")
+    @classmethod
+    def validate_github_username(cls, v: str) -> str:
+        if v and not v.replace("-", "").replace("_", "").isalnum():
+            raise ValueError("GitHub username must contain only alphanumeric characters, hyphens, and underscores")
+        return v
+
 
 class DiscoverResponse(BaseModel):
     job_id: str
@@ -160,6 +183,7 @@ async def _run_discovery(job_id: str, input_data: dict):
             "search_results": [],
             "analyzed_results": {},
             "enrichment": {},
+            "sentiment": {},
             "confidence_score": 0.0,
             "person_profile": None,
             "cost_tracker": {},
@@ -168,6 +192,9 @@ async def _run_discovery(job_id: str, input_data: dict):
 
         result = await graph.ainvoke(initial_state)
         profile = result.get("person_profile", {})
+        sentiment = result.get("sentiment", {})
+        if sentiment:
+            profile["sentiment"] = sentiment
         elapsed_ms = (time.time() - start_time) * 1000
 
         async with factory() as session:
@@ -249,6 +276,17 @@ async def _run_discovery(job_id: str, input_data: dict):
             await session.commit()
             logger.info(f"Discovery complete for job {job_id}: {person.name} ({elapsed_ms:.0f}ms)")
 
+        from app.api.webhooks import fire_webhooks
+        await fire_webhooks("job.completed", {
+            "job_id": job_id,
+            "person_id": person.id,
+            "person_name": person.name,
+            "status": "completed",
+            "total_cost": result.get("cost_tracker", {}).get("total", 0.0),
+            "latency_ms": round(elapsed_ms),
+            "sources_hit": len(result.get("search_results", [])),
+        })
+
     except Exception as e:
         logger.error(f"Discovery failed for job {job_id}: {e}")
         async with factory() as session:
@@ -275,8 +313,17 @@ def _get_source_reliability(platform: str) -> float:
 
 # --- Jobs endpoint ---
 
+def _validate_uuid(value: str, label: str = "ID") -> str:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {label} format")
+    return value
+
+
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str):
+    _validate_uuid(job_id, "job_id")
     factory = get_session_factory()
     async with factory() as session:
         stmt = select(DiscoveryJob).where(DiscoveryJob.id == job_id)
@@ -360,6 +407,7 @@ async def list_persons(
 
 @router.get("/persons/{person_id}")
 async def get_person(person_id: str):
+    _validate_uuid(person_id, "person_id")
     factory = get_session_factory()
     async with factory() as session:
         person = (await session.execute(

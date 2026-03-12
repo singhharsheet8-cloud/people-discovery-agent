@@ -18,6 +18,7 @@ export interface PersonSource {
   raw_content?: string | null;
   snippet?: string;
   structured_data?: Record<string, unknown> | null;
+  confidence?: number;
   relevance_score: number;
   source_reliability?: number;
   fetched_at?: string;

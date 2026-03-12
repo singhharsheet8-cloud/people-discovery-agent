@@ -1,9 +1,9 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_synthesis_llm
+from app.config import get_synthesis_llm, get_settings
 from app.agent.state import AgentState
-from app.utils import async_retry
+from app.utils import async_retry, extract_usage, estimate_cost
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,11 @@ async def synthesize_profile(state: AgentState) -> dict:
     if deduped_facts:
         facts_str = f"\nVerified facts:\n" + "\n".join(f"- {f}" for f in deduped_facts)
 
+    sentiment = state.get("sentiment", {})
+    sentiment_str = ""
+    if sentiment and sentiment.get("summary"):
+        sentiment_str = f"\nSentiment analysis:\n- Reputation score: {sentiment.get('reputation_score', 'N/A')}/100\n- Key themes: {', '.join(sentiment.get('key_themes', []))}\n- Summary: {sentiment.get('summary', '')}"
+
     input_str = _format_input_for_prompt(input_data)
 
     all_sources_str = "\n\n".join(sources_text)
@@ -131,6 +136,7 @@ async def synthesize_profile(state: AgentState) -> dict:
 {analysis_text}
 {career_timeline_str}
 {facts_str}
+{sentiment_str}
 
 ALL Sources ({len(sources_text)} total):
 {all_sources_str}
@@ -141,6 +147,15 @@ IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, 
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ])
+
+    usage = extract_usage(response)
+    model_name = get_settings().synthesis_model
+    usage["model"] = model_name
+    usage["cost"] = estimate_cost(model_name, usage["input_tokens"], usage["output_tokens"])
+    usage["label"] = "synthesizer"
+
+    cost_tracker = dict(state.get("cost_tracker", {}))
+    cost_tracker["synthesizer"] = usage
 
     try:
         content = response.content.strip()
@@ -165,8 +180,12 @@ IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, 
 
     logger.info(f"Synthesized profile for: {profile.get('name', 'Unknown')} (bio: {len(profile.get('bio',''))} chars)")
 
+    total = sum(u.get("cost", 0) for u in cost_tracker.values() if isinstance(u, dict))
+    cost_tracker["total"] = round(total, 6)
+
     return {
         "person_profile": profile,
+        "cost_tracker": cost_tracker,
         "status": "complete",
     }
 

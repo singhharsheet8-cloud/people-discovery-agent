@@ -22,6 +22,7 @@ class AgentState(TypedDict):
     search_results: list[dict]
     analyzed_results: dict
     enrichment: dict
+    sentiment: dict
     confidence_score: float
     person_profile: Optional[dict]
     cost_tracker: dict
