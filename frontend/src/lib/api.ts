@@ -4,6 +4,11 @@ import type {
   PersonProfile,
   PersonSummary,
   CostStats,
+  SavedList,
+  PersonNote,
+  PersonTagItem,
+  AuditEntry,
+  UsageAnalytics,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -151,14 +156,14 @@ export async function loginAdmin(email: string, password: string) {
   return data;
 }
 
-export async function exportPerson(id: string, format: "json" | "csv" | "pdf" = "json") {
+export async function exportPerson(id: string, format: "json" | "csv" | "pdf" | "pptx" = "json") {
   const url = `${API_BASE}/persons/${id}/export?format=${format}`;
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
-  if (format === "pdf") return res.blob();
+  if (format === "pdf" || format === "pptx") return res.blob();
   if (format === "csv") return res.text();
   return res.json();
 }
@@ -260,4 +265,111 @@ export async function getMeetingPrep(personId: string, context?: string) {
 
 export async function getFactVerification(personId: string) {
   return fetchApi<Record<string, unknown>>(`/persons/${personId}/verify`);
+}
+
+// --- Saved Lists ---
+export async function getLists() {
+  return fetchApi<SavedList[]>("/lists");
+}
+
+export async function createList(data: { name: string; description?: string; color?: string }) {
+  return fetchApi<SavedList>("/lists", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function updateList(id: string, data: { name?: string; description?: string; color?: string }) {
+  return fetchApi<SavedList>(`/lists/${id}`, { method: "PUT", body: JSON.stringify(data) });
+}
+
+export async function deleteList(id: string) {
+  return fetchApi<{ deleted: boolean }>(`/lists/${id}`, { method: "DELETE" });
+}
+
+export async function getListPersons(listId: string, page = 1, perPage = 20) {
+  return fetchApi<{ items: PersonSummary[]; total: number }>(`/lists/${listId}/persons?page=${page}&per_page=${perPage}`);
+}
+
+export async function addToList(listId: string, personIds: string[]) {
+  return fetchApi<{ added: number }>(`/lists/${listId}/persons`, { method: "POST", body: JSON.stringify({ person_ids: personIds }) });
+}
+
+export async function removeFromList(listId: string, personId: string) {
+  return fetchApi<{ removed: boolean }>(`/lists/${listId}/persons/${personId}`, { method: "DELETE" });
+}
+
+// --- Notes ---
+export async function getNotes(personId: string) {
+  return fetchApi<PersonNote[]>(`/persons/${personId}/notes`);
+}
+
+export async function addNote(personId: string, content: string) {
+  return fetchApi<PersonNote>(`/persons/${personId}/notes`, { method: "POST", body: JSON.stringify({ content }) });
+}
+
+export async function updateNote(noteId: string, content: string) {
+  return fetchApi<PersonNote>(`/notes/${noteId}`, { method: "PUT", body: JSON.stringify({ content }) });
+}
+
+export async function deleteNote(noteId: string) {
+  return fetchApi<{ deleted: boolean }>(`/notes/${noteId}`, { method: "DELETE" });
+}
+
+// --- Tags ---
+export async function getTags(personId: string) {
+  return fetchApi<PersonTagItem[]>(`/persons/${personId}/tags`);
+}
+
+export async function addTags(personId: string, tags: string[]) {
+  return fetchApi<{ added: number }>(`/persons/${personId}/tags`, { method: "POST", body: JSON.stringify({ tags }) });
+}
+
+export async function removeTag(personId: string, tag: string) {
+  return fetchApi<{ removed: boolean }>(`/persons/${personId}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+}
+
+export async function getAllTags() {
+  return fetchApi<Array<{ tag: string; count: number }>>("/tags");
+}
+
+// --- Public Shares ---
+export async function createShare(personId: string) {
+  return fetchApi<{ share_token: string; share_url: string }>(`/persons/${personId}/share`, { method: "POST" });
+}
+
+export async function deleteShare(personId: string) {
+  return fetchApi<{ revoked: boolean }>(`/persons/${personId}/share`, { method: "DELETE" });
+}
+
+// --- Audit ---
+export async function getAuditLog(page = 1, perPage = 50, action?: string) {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (action) params.set("action", action);
+  return fetchApi<{ items: AuditEntry[]; total: number }>(`/admin/audit?${params}`);
+}
+
+// --- Analytics ---
+export async function getUsageAnalytics() {
+  return fetchApi<UsageAnalytics>("/admin/analytics");
+}
+
+// --- Advanced Persons Listing ---
+export async function getPersonsFiltered(params: {
+  page?: number;
+  per_page?: number;
+  search?: string;
+  company?: string;
+  location?: string;
+  min_confidence?: number;
+  sort_by?: string;
+  sort_order?: string;
+}) {
+  const p = new URLSearchParams();
+  if (params.page) p.set("page", String(params.page));
+  if (params.per_page) p.set("per_page", String(params.per_page));
+  if (params.search) p.set("search", params.search);
+  if (params.company) p.set("company", params.company);
+  if (params.location) p.set("location", params.location);
+  if (params.min_confidence !== undefined) p.set("min_confidence", String(params.min_confidence));
+  if (params.sort_by) p.set("sort_by", params.sort_by);
+  if (params.sort_order) p.set("sort_order", params.sort_order);
+  return fetchApi<{ items: PersonSummary[]; total: number; page: number; per_page: number }>(`/persons?${p}`);
 }

@@ -31,6 +31,7 @@ import {
   getMeetingPrep,
   getFactVerification,
 } from "@/lib/api";
+import CareerTimeline from "@/components/career-timeline";
 import type { PersonProfile, PersonSource } from "@/lib/types";
 import { confidenceColor, confidenceLabel } from "@/lib/utils";
 
@@ -60,17 +61,18 @@ export default function PersonDetailPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [intelData, setIntelData] = useState<Record<string, any>>({});
 
-  const handleExport = async (format: "json" | "csv" | "pdf") => {
+  const handleExport = async (format: "json" | "csv" | "pdf" | "pptx") => {
     setExporting(format);
     try {
       const data = await exportPerson(id, format);
       const safeName = person?.name?.replace(/\s+/g, "_") || "profile";
 
-      if (format === "pdf") {
+      if (format === "pdf" || format === "pptx") {
+        const ext = format === "pptx" ? "pptx" : "pdf";
         const url = URL.createObjectURL(data as Blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${safeName}_profile.pdf`;
+        a.download = `${safeName}_profile.${ext}`;
         a.click();
         URL.revokeObjectURL(url);
       } else if (format === "csv") {
@@ -228,6 +230,15 @@ export default function PersonDetailPage() {
                 <span className="text-xs">CSV</span>
               </button>
               <button
+                onClick={() => handleExport("pptx")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 px-2.5 py-2 text-white hover:bg-white/10 border-l border-white/10 transition-colors disabled:opacity-50"
+                title="Export PowerPoint"
+              >
+                <FileText size={14} />
+                <span className="text-xs">PPTX</span>
+              </button>
+              <button
                 onClick={() => handleExport("json")}
                 disabled={!!exporting}
                 className="flex items-center gap-1 px-2.5 py-2 text-white hover:bg-white/10 border-l border-white/10 transition-colors disabled:opacity-50"
@@ -272,6 +283,26 @@ export default function PersonDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Career Timeline */}
+      {Array.isArray(person.career_timeline) && person.career_timeline.length > 0 && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">
+            Career Timeline
+          </h2>
+          <CareerTimeline
+            timeline={person.career_timeline as Array<{
+              period?: string;
+              year?: string;
+              role?: string;
+              title?: string;
+              company?: string;
+              organization?: string;
+              description?: string;
+            }>}
+          />
+        </div>
+      )}
 
       {/* Bio */}
       {person.bio && (

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Loader2, Brain } from "lucide-react";
 import { suggestPersons, getPerson, getRelationshipMap } from "@/lib/api";
 import type { PersonProfile, PersonSummary } from "@/lib/types";
+import RadarChart from "@/components/radar-chart";
 
 export default function ComparePage() {
   const [searchLeft, setSearchLeft] = useState("");
@@ -274,6 +275,49 @@ export default function ComparePage() {
               }
             />
           </div>
+        </div>
+      )}
+
+      {/* Radar Chart comparison */}
+      {personLeft && personRight && (
+        <div className="bg-white/5 rounded-xl border border-white/10 p-6">
+          <h2 className="text-lg font-semibold text-white mb-4">Dimension Comparison</h2>
+          <RadarChart
+            data={[
+              {
+                label: "Industry Impact",
+                valueA: personLeft.confidence_score ?? 0.5,
+                valueB: personRight.confidence_score ?? 0.5,
+              },
+              {
+                label: "Thought Leadership",
+                valueA: Math.min(1, ((personLeft.expertise?.length ?? 0) / 10)),
+                valueB: Math.min(1, ((personRight.expertise?.length ?? 0) / 10)),
+              },
+              {
+                label: "Network Reach",
+                valueA: Math.min(1, ((personLeft.sources?.length ?? 0) / 20)),
+                valueB: Math.min(1, ((personRight.sources?.length ?? 0) / 20)),
+              },
+              {
+                label: "Innovation",
+                valueA: Math.min(1, ((personLeft.key_facts?.length ?? 0) / 5)),
+                valueB: Math.min(1, ((personRight.key_facts?.length ?? 0) / 5)),
+              },
+              {
+                label: "Media Presence",
+                valueA: Math.min(1, ((personLeft.sources?.length ?? 0) / 15)),
+                valueB: Math.min(1, ((personRight.sources?.length ?? 0) / 15)),
+              },
+              {
+                label: "Community Contribution",
+                valueA: Math.min(1, ((personLeft.expertise?.length ?? 0) / 8)),
+                valueB: Math.min(1, ((personRight.expertise?.length ?? 0) / 8)),
+              },
+            ]}
+            nameA={personLeft.name}
+            nameB={personRight.name}
+          />
         </div>
       )}
 

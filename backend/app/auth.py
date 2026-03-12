@@ -94,19 +94,34 @@ def _extract_token(request: Request) -> str | None:
     return request.query_params.get("token")
 
 
-async def require_admin(request: Request) -> dict:
-    """FastAPI dependency — rejects requests without a valid admin JWT."""
-    token = _extract_token(request)
-    if not token:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    payload = verify_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    if payload.get("type") == "refresh":
-        raise HTTPException(status_code=401, detail="Refresh tokens cannot be used as access tokens")
-    if payload.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return payload
+def require_role(*roles: str):
+    """FastAPI dependency factory — requires user's JWT role to be in allowed roles."""
+
+    async def _check(request: Request) -> dict:
+        token = _extract_token(request)
+        if not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        payload = verify_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        if payload.get("type") == "refresh":
+            raise HTTPException(
+                status_code=401, detail="Refresh tokens cannot be used as access tokens"
+            )
+        user_role = payload.get("role") or "admin"
+        if user_role not in roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied. Required role: one of {list(roles)}",
+            )
+        return payload
+
+    return _check
+
+
+require_admin = require_role("admin")
+require_viewer = require_role("admin", "viewer")
+require_api = require_role("admin", "viewer", "api_only")
 
 
 async def optional_auth(request: Request) -> dict | None:

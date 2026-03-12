@@ -176,3 +176,68 @@ class ApiUsageLog(Base):
     endpoint: Mapped[str] = mapped_column(String(100))
     cost: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SavedList(Base):
+    __tablename__ = "saved_lists"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    color: Mapped[str] = mapped_column(String(20), default="#3b82f6")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class PersonListItem(Base):
+    __tablename__ = "person_list_items"
+    __table_args__ = (Index("ix_person_list_unique", "list_id", "person_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    list_id: Mapped[str] = mapped_column(String(36), ForeignKey("saved_lists.id"), index=True)
+    person_id: Mapped[str] = mapped_column(String(36), ForeignKey("persons.id"), index=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PersonNote(Base):
+    __tablename__ = "person_notes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    person_id: Mapped[str] = mapped_column(String(36), ForeignKey("persons.id"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class PersonTag(Base):
+    __tablename__ = "person_tags"
+    __table_args__ = (Index("ix_person_tag_unique", "person_id", "tag", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    person_id: Mapped[str] = mapped_column(String(36), ForeignKey("persons.id"), index=True)
+    tag: Mapped[str] = mapped_column(String(100), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_email: Mapped[str] = mapped_column(String(255), index=True)
+    action: Mapped[str] = mapped_column(String(50), index=True)
+    target_type: Mapped[str] = mapped_column(String(50))
+    target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PublicShare(Base):
+    __tablename__ = "public_shares"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    person_id: Mapped[str] = mapped_column(String(36), ForeignKey("persons.id"), index=True)
+    share_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

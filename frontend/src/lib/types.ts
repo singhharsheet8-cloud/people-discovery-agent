@@ -121,3 +121,49 @@ export interface ChatMessage {
     suggestions?: string[];
   };
 }
+
+export interface SavedList {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;
+  person_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonNote {
+  id: string;
+  person_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonTagItem {
+  tag: string;
+  created_at: string;
+}
+
+export interface AuditEntry {
+  id: number;
+  user_email: string;
+  action: string;
+  target_type: string;
+  target_id?: string;
+  details?: string;
+  ip_address?: string;
+  created_at: string;
+}
+
+export interface UsageAnalytics {
+  total_persons: number;
+  total_sources: number;
+  total_discoveries: number;
+  discoveries_last_7_days: Array<{ date: string; count: number }>;
+  discoveries_last_30_days: Array<{ date: string; count: number }>;
+  top_searched_companies: Array<{ company: string; count: number }>;
+  source_distribution: Array<{ platform: string; count: number }>;
+  avg_confidence_score: number;
+  discoveries_by_status: Array<{ status: string; count: number }>;
+}

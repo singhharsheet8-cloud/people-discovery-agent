@@ -6,8 +6,11 @@ from sqlalchemy import delete, select
 from app.db import get_session_factory
 from app.models.db_models import SearchCache
 from app.config import get_settings
+from app.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
+
+REDIS_KEY_PREFIX = "pda:cache:"
 
 SOURCE_TTL_MAP = {
     # Direct scraper tools
@@ -46,8 +49,44 @@ def _hash_query(query: str, search_type: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+async def get_cached_redis(key: str) -> list[dict] | None:
+    """Fetch cached results from Redis. Returns None on miss or connection failure."""
+    redis_client = await get_redis()
+    if not redis_client:
+        return None
+    try:
+        full_key = f"{REDIS_KEY_PREFIX}{key}"
+        raw = await redis_client.get(full_key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+    except Exception as e:
+        logger.debug(f"Redis get failed, falling back to DB: {e}")
+        return None
+
+
+async def set_cached_redis(key: str, results: list[dict], ttl: int) -> None:
+    """Store results in Redis. Silently no-ops on connection failure."""
+    redis_client = await get_redis()
+    if not redis_client:
+        return
+    try:
+        full_key = f"{REDIS_KEY_PREFIX}{key}"
+        await redis_client.setex(full_key, ttl, json.dumps(results))
+    except Exception as e:
+        logger.debug(f"Redis set failed, DB cache still written: {e}")
+
+
 async def get_cached_results(query: str, search_type: str) -> list[dict] | None:
     query_hash = _hash_query(query, search_type)
+
+    # Try Redis first (sub-ms latency)
+    redis_results = await get_cached_redis(query_hash)
+    if redis_results is not None:
+        logger.info(f"Cache HIT (Redis) for '{query[:50]}' ({search_type})")
+        return redis_results
+
+    # Fall back to DB
     factory = get_session_factory()
     async with factory() as session:
         stmt = (
@@ -59,7 +98,7 @@ async def get_cached_results(query: str, search_type: str) -> list[dict] | None:
         result = await session.execute(stmt)
         entry = result.scalar_one_or_none()
         if entry and not entry.is_expired:
-            logger.info(f"Cache HIT for '{query[:50]}' ({search_type})")
+            logger.info(f"Cache HIT (DB) for '{query[:50]}' ({search_type})")
             return entry.get_results()
     logger.debug(f"Cache MISS for '{query[:50]}' ({search_type})")
     return None
@@ -69,6 +108,11 @@ async def set_cached_results(query: str, search_type: str, results: list[dict]) 
     ttl = _get_ttl(search_type)
     query_hash = _hash_query(query, search_type)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+
+    # Write to Redis (best-effort)
+    await set_cached_redis(query_hash, results, ttl)
+
+    # Write to DB (persistent fallback)
     factory = get_session_factory()
     async with factory() as session:
         await session.execute(

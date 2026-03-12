@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 5
     max_daily_discoveries: int = 100
 
+    slack_signing_secret: str = ""
+    slack_bot_token: str = ""
+    hubspot_api_key: str = ""
+
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
     db_pool_size: int = 10
     db_pool_overflow: int = 20

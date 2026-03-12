@@ -65,8 +65,8 @@ export default function BatchPage() {
         setError("No valid rows found in CSV");
         return;
       }
-      if (parsed.length > 20) {
-        setError("Maximum 20 people per batch. Please split your CSV.");
+      if (parsed.length > 50) {
+        setError("Maximum 50 people per batch. Please split your CSV.");
         return;
       }
 
@@ -193,7 +193,7 @@ export default function BatchPage() {
       <div className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-4">
         <h2 className="text-lg font-semibold text-white">Upload CSV</h2>
         <p className="text-sm text-gray-400">
-          Upload a CSV file with up to 20 people to discover. Required column: <code className="text-brand-400">name</code>.
+          Upload a CSV file with up to 50 people to discover. Required column: <code className="text-brand-400">name</code>.
           Optional: <code className="text-gray-500">company, role, location, linkedin_url, twitter_handle, github_username, instagram_handle, context</code>.
         </p>
 

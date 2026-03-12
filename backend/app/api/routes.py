@@ -9,12 +9,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, HTTPException, Depends, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session_factory
-from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion
+from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion, AdminUser
 from app.cache import cleanup_expired_cache
-from app.auth import require_admin
+from app.auth import require_admin, require_api, require_viewer
+from passlib.hash import bcrypt
+from app.rate_limiter import rate_limiter
 from app.config import get_settings
 from app.intelligence import (
     analyze_sentiment,
@@ -141,7 +143,7 @@ class JobDetail(BaseModel):
 # --- Discovery endpoint ---
 
 @router.post("/discover", response_model=DiscoverResponse)
-async def discover_person(request: DiscoverRequest, _admin=Depends(require_admin)):
+async def discover_person(request: DiscoverRequest, _auth=Depends(require_api)):
     """Single-shot person discovery. Returns a job ID for polling."""
     settings = get_settings()
     factory = get_session_factory()
@@ -188,11 +190,11 @@ async def discover_person(request: DiscoverRequest, _admin=Depends(require_admin
 
 
 class BatchDiscoverRequest(BaseModel):
-    persons: list[DiscoverRequest] = Field(..., min_length=1, max_length=20)
+    persons: list[DiscoverRequest] = Field(..., min_length=1, max_length=50)
 
 
 @router.post("/discover/batch")
-async def batch_discover(request: BatchDiscoverRequest, _admin=Depends(require_admin)):
+async def batch_discover(request: BatchDiscoverRequest, _auth=Depends(require_api)):
     """Start discovery for multiple people. Returns list of job IDs."""
     settings = get_settings()
     factory = get_session_factory()
@@ -531,7 +533,7 @@ def _validate_uuid(value: str, label: str = "ID") -> str:
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, _auth=Depends(require_api)):
     _validate_uuid(job_id, "job_id")
     factory = get_session_factory()
     async with factory() as session:
@@ -574,16 +576,36 @@ async def list_persons(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: str = Query("", max_length=255),
+    company: str = Query("", max_length=255),
+    location: str = Query("", max_length=255),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    sort_by: str = Query("updated_at", pattern="^(updated_at|name|confidence_score|created_at)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    _auth=Depends(require_api),
 ):
     factory = get_session_factory()
     async with factory() as session:
-        query = select(Person).order_by(desc(Person.updated_at))
+        sort_col = getattr(Person, sort_by, Person.updated_at)
+        order_fn = desc if sort_order == "desc" else asc
+        query = select(Person).order_by(order_fn(sort_col))
 
         if search:
             safe = search.replace("%", r"\%").replace("_", r"\_")
             query = query.where(
                 (Person.name.ilike(f"%{safe}%")) | (Person.company.ilike(f"%{safe}%"))
+                | (Person.current_role.ilike(f"%{safe}%"))
             )
+
+        if company:
+            safe_c = company.replace("%", r"\%").replace("_", r"\_")
+            query = query.where(Person.company.ilike(f"%{safe_c}%"))
+
+        if location:
+            safe_l = location.replace("%", r"\%").replace("_", r"\_")
+            query = query.where(Person.location.ilike(f"%{safe_l}%"))
+
+        if min_confidence > 0:
+            query = query.where(Person.confidence_score >= min_confidence)
 
         # Count
         count_q = select(func.count()).select_from(query.subquery())
@@ -615,7 +637,7 @@ async def list_persons(
 
 
 @router.get("/persons/{person_id}")
-async def get_person(person_id: str):
+async def get_person(person_id: str, _auth=Depends(require_api)):
     _validate_uuid(person_id, "person_id")
     factory = get_session_factory()
     async with factory() as session:
@@ -753,7 +775,11 @@ async def delete_person(person_id: str, _admin=Depends(require_admin)):
 
 
 @router.get("/persons/{person_id}/export")
-async def export_person(person_id: str, format: str = Query("json", pattern="^(json|csv|pdf)$")):
+async def export_person(
+    person_id: str,
+    format: str = Query("json", pattern="^(json|csv|pdf|pptx)$"),
+    _auth=Depends(require_viewer),
+):
     """Export person profile as JSON, CSV, or PDF."""
     _validate_uuid(person_id, "person_id")
     factory = get_session_factory()
@@ -788,6 +814,14 @@ async def export_person(person_id: str, format: str = Query("json", pattern="^(j
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{safe_name}_profile.pdf"'},
+        )
+
+    if format == "pptx":
+        pptx_bytes = _generate_person_pptx(profile)
+        return StreamingResponse(
+            io.BytesIO(pptx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_profile.pptx"'},
         )
 
     if format == "csv":
@@ -857,6 +891,12 @@ async def re_search_person(person_id: str, _admin=Depends(require_admin)):
 
 
 # --- Cost dashboard ---
+
+@router.get("/admin/rate-limits")
+async def get_rate_limits(_admin=Depends(require_admin)):
+    """Get current per-source rate limit status."""
+    return rate_limiter.get_status()
+
 
 @router.get("/admin/costs")
 async def get_cost_stats(_admin=Depends(require_admin)):
@@ -928,6 +968,12 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=10)
 
 
+class CreateUserRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    role: str = Field("admin", pattern="^(admin|viewer|api_only)$")
+
+
 @router.post("/auth/refresh")
 async def refresh_token(request: RefreshRequest):
     from app.auth import verify_refresh_token, create_token_pair
@@ -936,8 +982,75 @@ async def refresh_token(request: RefreshRequest):
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    tokens = create_token_pair({"sub": payload["sub"], "role": payload["role"]})
+    tokens = create_token_pair({"sub": payload["sub"], "role": payload.get("role", "admin")})
     return tokens
+
+
+# --- User management (admin only) ---
+
+@router.post("/admin/users")
+async def create_user(request: CreateUserRequest, _admin=Depends(require_admin)):
+    """Create a new user. Admin only."""
+    factory = get_session_factory()
+    async with factory() as session:
+        existing = (await session.execute(
+            select(AdminUser).where(AdminUser.email == request.email)
+        )).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=409, detail="User with this email already exists")
+
+        user = AdminUser(
+            email=request.email,
+            password_hash=bcrypt.hash(request.password),
+            role=request.role,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "created_at": user.created_at.isoformat() if user.created_at else "",
+        }
+
+
+@router.get("/admin/users")
+async def list_users(_admin=Depends(require_admin)):
+    """List all users. Admin only."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(AdminUser).order_by(AdminUser.email)
+        )
+        users = result.scalars().all()
+        return {
+            "users": [
+                {
+                    "id": u.id,
+                    "email": u.email,
+                    "role": u.role,
+                    "created_at": u.created_at.isoformat() if u.created_at else "",
+                }
+                for u in users
+            ],
+        }
+
+
+@router.delete("/admin/users/{user_id}")
+async def delete_user(user_id: str, _admin=Depends(require_admin)):
+    """Delete a user. Admin only."""
+    _validate_uuid(user_id, "user_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        user = (await session.execute(
+            select(AdminUser).where(AdminUser.id == user_id)
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        await session.delete(user)
+        await session.commit()
+        return {"deleted": True}
 
 
 # --- Utility ---
@@ -996,7 +1109,7 @@ def _person_to_dict_for_intelligence(person: Person, sources: list[PersonSource]
 
 
 @router.get("/persons/{person_id}/sentiment")
-async def get_sentiment_analysis(person_id: str, _admin=Depends(require_admin)):
+async def get_sentiment_analysis(person_id: str, _auth=Depends(require_viewer)):
     """Analyze public sentiment across all sources for a person."""
     factory = get_session_factory()
     async with factory() as session:
@@ -1017,7 +1130,7 @@ async def get_sentiment_analysis(person_id: str, _admin=Depends(require_admin)):
 
 
 @router.get("/persons/{person_id}/influence")
-async def get_influence_score(person_id: str, _admin=Depends(require_admin)):
+async def get_influence_score(person_id: str, _auth=Depends(require_viewer)):
     """Calculate multi-dimensional influence score for a person."""
     factory = get_session_factory()
     async with factory() as session:
@@ -1040,7 +1153,7 @@ async def get_influence_score(person_id: str, _admin=Depends(require_admin)):
 @router.post("/persons/relationships")
 async def get_relationship_map(
     request: dict,
-    _admin=Depends(require_admin),
+    _auth=Depends(require_viewer),
 ):
     """Map relationships between two persons."""
     person_a_id = request.get("person_a_id", "")
@@ -1077,7 +1190,7 @@ async def get_relationship_map(
 async def get_meeting_prep(
     person_id: str,
     request: dict | None = Body(None),
-    _admin=Depends(require_admin),
+    _auth=Depends(require_viewer),
 ):
     """Generate AI-powered meeting preparation insights."""
     context = (request or {}).get("context", "")
@@ -1100,7 +1213,7 @@ async def get_meeting_prep(
 
 
 @router.get("/persons/{person_id}/verify")
-async def get_fact_verification(person_id: str, _admin=Depends(require_admin)):
+async def get_fact_verification(person_id: str, _auth=Depends(require_viewer)):
     """Cross-reference facts from multiple sources and flag inconsistencies."""
     factory = get_session_factory()
     async with factory() as session:
@@ -1246,6 +1359,138 @@ def _generate_person_pdf(profile: dict) -> bytes:
     pdf.cell(0, 5, f"Generated by People Discovery Agent | Version {profile.get('version', 1)}", align="C")
 
     return pdf.output()
+
+
+def _generate_person_pptx(profile: dict) -> bytes:
+    """Generate a professional one-pager PPTX presentation for a person profile."""
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+        from pptx.dml.color import RGBColor
+
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)
+        prs.slide_height = Inches(7.5)
+
+        _BG = RGBColor(0x1A, 0x1A, 0x2E)
+        _TITLE = RGBColor(255, 255, 255)
+        _BODY = RGBColor(0xE0, 0xE0, 0xE0)
+        _ACCENT = RGBColor(0x3B, 0x82, 0xF6)
+
+        def _apply_dark_bg(slide):
+            background = slide.background
+            fill = background.fill
+            fill.solid()
+            fill.fore_color.rgb = _BG
+
+        # Slide 1: Title
+        slide_layout = prs.slide_layouts[6]
+        s1 = prs.slides.add_slide(slide_layout)
+        _apply_dark_bg(s1)
+        title_box = s1.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(12.333), Inches(1.5))
+        tf = title_box.text_frame
+        p = tf.paragraphs[0]
+        p.text = profile.get("name") or "Unknown"
+        p.font.size = Pt(44)
+        p.font.bold = True
+        p.font.color.rgb = _TITLE
+        p.alignment = 1
+
+        role_parts = [profile.get("current_role"), profile.get("company")]
+        subtitle = " at ".join(p for p in role_parts if p) or ""
+        if subtitle:
+            sub_box = s1.shapes.add_textbox(Inches(0.5), Inches(4.2), Inches(12.333), Inches(0.8))
+            sub_tf = sub_box.text_frame
+            sub_p = sub_tf.paragraphs[0]
+            sub_p.text = subtitle
+            sub_p.font.size = Pt(24)
+            sub_p.font.color.rgb = _BODY
+            sub_p.alignment = 1
+
+        # Slide 2: Bio, Key Facts, Expertise
+        s2 = prs.slides.add_slide(slide_layout)
+        _apply_dark_bg(s2)
+        left, top, width, height = Inches(0.5), Inches(0.5), Inches(12.333), Inches(6.5)
+        content_box = s2.shapes.add_textbox(left, top, width, height)
+        tf2 = content_box.text_frame
+        tf2.word_wrap = True
+
+        def _add_section(title: str, items: list | None = None, body: str | None = None):
+            p = tf2.add_paragraph()
+            p.text = title
+            p.font.size = Pt(18)
+            p.font.bold = True
+            p.font.color.rgb = _ACCENT
+            p.space_after = Pt(6)
+            if body:
+                bp = tf2.add_paragraph()
+                bp.text = body[:1500] if body else ""
+                bp.font.size = Pt(12)
+                bp.font.color.rgb = _BODY
+                bp.space_after = Pt(12)
+            if items:
+                for item in items[:20]:
+                    label = str(item) if isinstance(item, str) else json.dumps(item)[:200] if isinstance(item, dict) else str(item)
+                    ip = tf2.add_paragraph()
+                    ip.text = f"• {label[:300]}"
+                    ip.font.size = Pt(11)
+                    ip.font.color.rgb = _BODY
+                    ip.space_after = Pt(4)
+                tf2.add_paragraph()
+
+        if profile.get("bio"):
+            _add_section("Bio", body=profile["bio"])
+        if profile.get("key_facts"):
+            _add_section("Key Facts", items=profile["key_facts"])
+        if profile.get("expertise"):
+            _add_section("Expertise", items=profile["expertise"])
+        if not any([profile.get("bio"), profile.get("key_facts"), profile.get("expertise")]):
+            _add_section("Overview", body="No additional details available.")
+
+        # Slide 3: Career & Sources
+        s3 = prs.slides.add_slide(slide_layout)
+        _apply_dark_bg(s3)
+        career_box = s3.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(12.333), Inches(6.5))
+        tf3 = career_box.text_frame
+        tf3.word_wrap = True
+
+        p3 = tf3.paragraphs[0]
+        p3.text = "Career & Sources"
+        p3.font.size = Pt(18)
+        p3.font.bold = True
+        p3.font.color.rgb = _ACCENT
+        p3.space_after = Pt(8)
+
+        sources_count = len(profile.get("sources") or [])
+        sp = tf3.add_paragraph()
+        sp.text = f"Sources: {sources_count}"
+        sp.font.size = Pt(12)
+        sp.font.color.rgb = _BODY
+        sp.space_after = Pt(12)
+
+        for entry in (profile.get("career_timeline") or [])[:15]:
+            if isinstance(entry, dict):
+                period = entry.get("period", entry.get("year", ""))
+                role = entry.get("role", entry.get("title", ""))
+                org = entry.get("company", entry.get("organization", ""))
+                line = f"{period}: {role}"
+                if org:
+                    line += f" at {org}"
+            else:
+                line = str(entry)
+            ep = tf3.add_paragraph()
+            ep.text = f"• {line[:200]}"
+            ep.font.size = Pt(11)
+            ep.font.color.rgb = _BODY
+            ep.space_after = Pt(4)
+
+        buf = io.BytesIO()
+        prs.save(buf)
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception as e:
+        logger.exception("PPTX generation failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to generate PPTX: {str(e)}")
 
 
 def _person_to_dict(person: Person) -> dict:

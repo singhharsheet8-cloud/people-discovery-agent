@@ -2,8 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Search, ChevronLeft, ChevronRight, Users } from "lucide-react";
-import { getPersons } from "@/lib/api";
+import {
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Users,
+  Filter,
+  SlidersHorizontal,
+  ArrowUpDown,
+  X,
+} from "lucide-react";
+import { getPersonsFiltered } from "@/lib/api";
 import type { PersonSummary } from "@/lib/types";
 import { confidenceColor } from "@/lib/utils";
 
@@ -14,14 +23,32 @@ export default function AdminPersonsPage() {
   const [persons, setPersons] = useState<PersonSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showFilters, setShowFilters] = useState(false);
+
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
+  const [minConfidence, setMinConfidence] = useState(0);
+  const [sortBy, setSortBy] = useState("updated_at");
+  const [sortOrder, setSortOrder] = useState("desc");
+
+  const activeFilterCount = [companyFilter, locationFilter, minConfidence > 0].filter(Boolean).length;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getPersons(page, PER_PAGE, search)
+    getPersonsFiltered({
+      page,
+      per_page: PER_PAGE,
+      search,
+      company: companyFilter,
+      location: locationFilter,
+      min_confidence: minConfidence,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+    })
       .then((res) => {
         if (!cancelled) {
           setPersons(Array.isArray(res.items) ? res.items : []);
@@ -40,13 +67,32 @@ export default function AdminPersonsPage() {
     return () => {
       cancelled = true;
     };
-  }, [page, search]);
+  }, [page, search, companyFilter, locationFilter, minConfidence, sortBy, sortOrder]);
 
   const totalPages = Math.ceil(total / PER_PAGE);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setSearch(searchInput);
+    setPage(1);
+  };
+
+  const clearFilters = () => {
+    setCompanyFilter("");
+    setLocationFilter("");
+    setMinConfidence(0);
+    setSortBy("updated_at");
+    setSortOrder("desc");
+    setPage(1);
+  };
+
+  const toggleSort = (col: string) => {
+    if (sortBy === col) {
+      setSortOrder(sortOrder === "desc" ? "asc" : "desc");
+    } else {
+      setSortBy(col);
+      setSortOrder("desc");
+    }
     setPage(1);
   };
 
@@ -60,6 +106,13 @@ export default function AdminPersonsPage() {
     });
   };
 
+  const SortIcon = ({ col }: { col: string }) => (
+    <ArrowUpDown
+      size={12}
+      className={`inline ml-1 ${sortBy === col ? "text-blue-400" : "text-gray-600"}`}
+    />
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -67,9 +120,25 @@ export default function AdminPersonsPage() {
           <Users size={24} />
           Discovered Persons
         </h1>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+            showFilters || activeFilterCount > 0
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+              : "bg-white/10 text-gray-400 hover:text-white"
+          }`}
+        >
+          <SlidersHorizontal size={16} />
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="ml-1 w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
         <form onSubmit={handleSearch} className="flex gap-2">
           <div className="relative flex-1">
             <Search
@@ -80,7 +149,7 @@ export default function AdminPersonsPage() {
               type="text"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Filter by name or company..."
+              placeholder="Search by name, company, or role..."
               className="w-full pl-10 pr-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
             />
           </div>
@@ -91,6 +160,56 @@ export default function AdminPersonsPage() {
             Search
           </button>
         </form>
+
+        {showFilters && (
+          <div className="border-t border-white/10 pt-3 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Company</label>
+                <input
+                  type="text"
+                  value={companyFilter}
+                  onChange={(e) => { setCompanyFilter(e.target.value); setPage(1); }}
+                  placeholder="e.g. Google, Tesla..."
+                  className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Location</label>
+                <input
+                  type="text"
+                  value={locationFilter}
+                  onChange={(e) => { setLocationFilter(e.target.value); setPage(1); }}
+                  placeholder="e.g. San Francisco, NYC..."
+                  className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">
+                  Min Confidence: {Math.round(minConfidence * 100)}%
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={minConfidence}
+                  onChange={(e) => { setMinConfidence(parseFloat(e.target.value)); setPage(1); }}
+                  className="w-full accent-blue-500"
+                />
+              </div>
+            </div>
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+              >
+                <X size={12} />
+                Clear all filters
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
@@ -105,8 +224,11 @@ export default function AdminPersonsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-white/10">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
-                    Name
+                  <th
+                    className="text-left py-3 px-4 text-sm font-medium text-gray-400 cursor-pointer hover:text-white"
+                    onClick={() => toggleSort("name")}
+                  >
+                    Name <SortIcon col="name" />
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
                     Company
@@ -114,14 +236,20 @@ export default function AdminPersonsPage() {
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
                     Role
                   </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
-                    Confidence
+                  <th
+                    className="text-left py-3 px-4 text-sm font-medium text-gray-400 cursor-pointer hover:text-white"
+                    onClick={() => toggleSort("confidence_score")}
+                  >
+                    Confidence <SortIcon col="confidence_score" />
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
                     Sources
                   </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">
-                    Updated
+                  <th
+                    className="text-left py-3 px-4 text-sm font-medium text-gray-400 cursor-pointer hover:text-white"
+                    onClick={() => toggleSort("updated_at")}
+                  >
+                    Updated <SortIcon col="updated_at" />
                   </th>
                 </tr>
               </thead>

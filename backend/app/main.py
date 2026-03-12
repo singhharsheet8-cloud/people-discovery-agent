@@ -20,6 +20,9 @@ from app.api.routes import router
 from app.api.webhooks import router as webhooks_router
 from app.api.api_keys import router as api_keys_router
 from app.api.suggest import router as suggest_router
+from app.api.lists_notes import router as lists_notes_router
+from app.api.websocket import router as websocket_router
+from app.api.integrations import router as integrations_router
 from app.middleware import (
     RateLimitMiddleware,
     RequestIDMiddleware,
@@ -204,3 +207,6 @@ app.include_router(router)
 app.include_router(webhooks_router)
 app.include_router(api_keys_router)
 app.include_router(suggest_router)
+app.include_router(lists_notes_router)
+app.include_router(websocket_router)
+app.include_router(integrations_router)

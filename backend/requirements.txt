@@ -28,3 +28,4 @@ pytest-cov>=6.0.0
 sentry-sdk[fastapi]>=2.0.0
 redis[hiredis]>=5.0.0
 fpdf2>=2.8.0
+python-pptx>=0.6.0

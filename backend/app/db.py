@@ -91,6 +91,12 @@ async def init_db() -> None:
         WebhookDelivery,
         ApiKey,
         ApiUsageLog,
+        SavedList,
+        PersonListItem,
+        PersonNote,
+        PersonTag,
+        AuditLog,
+        PublicShare,
     )
 
     engine = get_engine()
