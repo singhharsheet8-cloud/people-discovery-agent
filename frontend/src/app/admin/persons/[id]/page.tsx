@@ -11,8 +11,11 @@ import {
   MapPin,
   Building2,
   Briefcase,
+  Download,
+  FileText,
+  FileSpreadsheet,
 } from "lucide-react";
-import { getPerson, deletePerson, reSearchPerson, getJob } from "@/lib/api";
+import { getPerson, deletePerson, reSearchPerson, getJob, exportPerson } from "@/lib/api";
 import type { PersonProfile, PersonSource } from "@/lib/types";
 import { confidenceColor, confidenceLabel } from "@/lib/utils";
 
@@ -36,6 +39,44 @@ export default function PersonDetailPage() {
   const [sourceTab, setSourceTab] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [reSearching, setReSearching] = useState(false);
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  const handleExport = async (format: "json" | "csv" | "pdf") => {
+    setExporting(format);
+    try {
+      const data = await exportPerson(id, format);
+      const safeName = person?.name?.replace(/\s+/g, "_") || "profile";
+
+      if (format === "pdf") {
+        const url = URL.createObjectURL(data as Blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${safeName}_profile.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else if (format === "csv") {
+        const blob = new Blob([data as string], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${safeName}_profile.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${safeName}_profile.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setExporting(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -140,7 +181,7 @@ export default function PersonDetailPage() {
               {confidenceLabel(person.confidence_score)}
             </span>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Link
               href={`/admin/persons/${id}/edit`}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white hover:bg-white/15 transition-colors"
@@ -148,6 +189,35 @@ export default function PersonDetailPage() {
               <Edit size={16} />
               Edit
             </Link>
+            <div className="flex items-center rounded-lg bg-white/10 overflow-hidden">
+              <button
+                onClick={() => handleExport("pdf")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 px-2.5 py-2 text-white hover:bg-white/10 transition-colors disabled:opacity-50"
+                title="Export PDF"
+              >
+                <FileText size={14} />
+                <span className="text-xs">PDF</span>
+              </button>
+              <button
+                onClick={() => handleExport("csv")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 px-2.5 py-2 text-white hover:bg-white/10 border-l border-white/10 transition-colors disabled:opacity-50"
+                title="Export CSV"
+              >
+                <FileSpreadsheet size={14} />
+                <span className="text-xs">CSV</span>
+              </button>
+              <button
+                onClick={() => handleExport("json")}
+                disabled={!!exporting}
+                className="flex items-center gap-1 px-2.5 py-2 text-white hover:bg-white/10 border-l border-white/10 transition-colors disabled:opacity-50"
+                title="Export JSON"
+              >
+                <Download size={14} />
+                <span className="text-xs">JSON</span>
+              </button>
+            </div>
             <button
               onClick={handleReSearch}
               disabled={reSearching}

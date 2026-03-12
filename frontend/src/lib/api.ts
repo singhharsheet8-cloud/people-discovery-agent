@@ -147,13 +147,14 @@ export async function batchDiscover(persons: DiscoverRequest[]) {
   );
 }
 
-export async function exportPerson(id: string, format: "json" | "csv" = "json") {
+export async function exportPerson(id: string, format: "json" | "csv" | "pdf" = "json") {
   const url = `${API_BASE}/persons/${id}/export?format=${format}`;
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
+  if (format === "pdf") return res.blob();
   if (format === "csv") return res.text();
   return res.json();
 }

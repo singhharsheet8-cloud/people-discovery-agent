@@ -14,6 +14,7 @@ import {
   Loader2,
   Menu,
   X,
+  Book,
 } from "lucide-react";
 
 export default function AdminLayout({
@@ -57,6 +58,7 @@ export default function AdminLayout({
     { href: "/admin/api-keys", label: "API Keys", icon: Key },
     { href: "/admin/webhooks", label: "Webhooks", icon: Webhook },
     { href: "/admin/compare", label: "Compare", icon: GitCompare },
+    { href: "/admin/docs", label: "API Docs", icon: Book },
   ];
 
   const sidebar = (
