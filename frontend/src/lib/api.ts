@@ -162,3 +162,70 @@ export async function exportPerson(id: string, format: "json" | "csv" | "pdf" = 
 export async function healthCheck() {
   return fetchApi<Record<string, unknown>>("/health");
 }
+
+// ── API Keys ──────────────────────────────────────────────────────
+
+export interface ApiKeyItem {
+  id: string;
+  name: string;
+  key?: string;
+  rate_limit_per_day: number;
+  active: boolean;
+  usage_count: number;
+  total_cost: number;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export async function getApiKeys() {
+  return fetchApi<ApiKeyItem[]>("/api-keys");
+}
+
+export async function createApiKey(name: string, rateLimitPerDay: number) {
+  return fetchApi<ApiKeyItem>("/api-keys", {
+    method: "POST",
+    body: JSON.stringify({ name, rate_limit_per_day: rateLimitPerDay }),
+  });
+}
+
+export async function revokeApiKey(id: string) {
+  return fetchApi<{ deleted: boolean }>(`/api-keys/${id}`, { method: "DELETE" });
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────
+
+export interface WebhookItem {
+  id: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  created_at: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event: string;
+  status_code: number | null;
+  success: boolean;
+  attempts: number;
+  created_at: string;
+}
+
+export async function getWebhooks() {
+  return fetchApi<WebhookItem[]>("/webhooks");
+}
+
+export async function createWebhook(url: string, events: string[]) {
+  return fetchApi<WebhookItem>("/webhooks", {
+    method: "POST",
+    body: JSON.stringify({ url, events }),
+  });
+}
+
+export async function deleteWebhook(id: string) {
+  return fetchApi<{ deleted: boolean }>(`/webhooks/${id}`, { method: "DELETE" });
+}
+
+export async function getWebhookDeliveries(id: string) {
+  return fetchApi<WebhookDelivery[]>(`/webhooks/${id}/deliveries`);
+}

@@ -2,29 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Plus, Trash2, Copy, CheckCircle } from "lucide-react";
-
-interface ApiKeyItem {
-  id: string;
-  name: string;
-  key?: string;
-  rate_limit_per_day: number;
-  active: boolean;
-  usage_count: number;
-  total_cost: number;
-  last_used_at: string | null;
-  created_at: string;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
-
-function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== "undefined"
-    ? (localStorage.getItem("access_token") || localStorage.getItem("admin_token"))
-    : null;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return headers;
-}
+import {
+  getApiKeys,
+  createApiKey,
+  revokeApiKey,
+  type ApiKeyItem,
+} from "@/lib/api";
 
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -33,51 +16,49 @@ export default function ApiKeysPage() {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     fetchKeys();
   }, []);
 
   async function fetchKeys() {
+    setError("");
     try {
-      const res = await fetch(`${API_BASE}/api-keys`, { headers: getAuthHeaders() });
-      const data = await res.json();
+      const data = await getApiKeys();
       setKeys(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch API keys:", e);
+      setKeys([]);
+      setError(e instanceof Error ? e.message : "Failed to load API keys");
     } finally {
       setLoading(false);
     }
   }
 
-  async function createKey() {
+  async function handleCreate() {
     if (!newKeyName.trim()) return;
+    setError("");
     try {
-      const res = await fetch(`${API_BASE}/api-keys`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ name: newKeyName, rate_limit_per_day: newKeyLimit }),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      setCreatedKey(data.key);
+      const data = await createApiKey(newKeyName, newKeyLimit);
+      setCreatedKey(data.key ?? null);
       setNewKeyName("");
       fetchKeys();
     } catch (e) {
-      console.error(e);
+      console.error("Failed to create API key:", e);
+      setError(e instanceof Error ? e.message : "Failed to create key");
     }
   }
 
-  async function revokeKey(id: string) {
+  async function handleRevoke(id: string) {
     if (!confirm("Revoke this API key?")) return;
+    setError("");
     try {
-      await fetch(`${API_BASE}/api-keys/${id}`, {
-        method: "DELETE",
-        headers: getAuthHeaders(),
-      });
+      await revokeApiKey(id);
       fetchKeys();
     } catch (e) {
-      console.error(e);
+      console.error("Failed to revoke API key:", e);
+      setError(e instanceof Error ? e.message : "Failed to revoke key");
     }
   }
 
@@ -92,6 +73,12 @@ export default function ApiKeysPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">API Key Management</h1>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
+          {error}
+        </div>
+      )}
 
       {/* Create new key */}
       <div className="bg-white/5 rounded-xl border border-white/10 p-6">
@@ -116,7 +103,7 @@ export default function ApiKeysPage() {
             />
           </div>
           <button
-            onClick={createKey}
+            onClick={handleCreate}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
           >
             <Plus size={16} /> Create
@@ -183,7 +170,7 @@ export default function ApiKeysPage() {
                 <td className="px-4 py-3">
                   {k.active && (
                     <button
-                      onClick={() => revokeKey(k.id)}
+                      onClick={() => handleRevoke(k.id)}
                       className="p-1 text-gray-500 hover:text-red-400 transition-colors"
                     >
                       <Trash2 size={14} />

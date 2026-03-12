@@ -2,41 +2,23 @@
 
 import { useEffect, useState } from "react";
 import { Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  getWebhooks,
+  createWebhook as apiCreateWebhook,
+  deleteWebhook as apiDeleteWebhook,
+  getWebhookDeliveries,
+  type WebhookItem,
+  type WebhookDelivery,
+} from "@/lib/api";
 
-interface WebhookItem {
-  id: string;
-  url: string;
-  events: string[];
-  active: boolean;
-  created_at: string;
-}
-
-interface WebhookDelivery {
-  id: string;
-  event: string;
-  status_code: number | null;
-  success: boolean;
-  attempts: number;
-  created_at: string;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
 const WEBHOOK_EVENTS = ["job.completed", "job.failed", "person.updated"];
-
-function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== "undefined"
-    ? (localStorage.getItem("access_token") || localStorage.getItem("admin_token"))
-    : null;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return headers;
-}
 
 export default function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<WebhookItem[]>([]);
   const [newUrl, setNewUrl] = useState("");
   const [newEvents, setNewEvents] = useState<string[]>(["job.completed"]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<Record<string, WebhookDelivery[]>>({});
 
@@ -45,43 +27,42 @@ export default function WebhooksPage() {
   }, []);
 
   async function fetchWebhooks() {
+    setError("");
     try {
-      const res = await fetch(`${API_BASE}/webhooks`, { headers: getAuthHeaders() });
-      const data = await res.json();
+      const data = await getWebhooks();
       setWebhooks(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch webhooks:", e);
+      setWebhooks([]);
+      setError(e instanceof Error ? e.message : "Failed to load webhooks");
     } finally {
       setLoading(false);
     }
   }
 
-  async function createWebhook() {
+  async function handleCreate() {
     if (!newUrl.trim()) return;
+    setError("");
     try {
-      await fetch(`${API_BASE}/webhooks`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ url: newUrl.trim(), events: newEvents }),
-      });
+      await apiCreateWebhook(newUrl.trim(), newEvents);
       setNewUrl("");
       setNewEvents(["job.completed"]);
       fetchWebhooks();
     } catch (e) {
-      console.error(e);
+      console.error("Failed to create webhook:", e);
+      setError(e instanceof Error ? e.message : "Failed to create webhook");
     }
   }
 
-  async function deleteWebhook(id: string) {
+  async function handleDelete(id: string) {
     if (!confirm("Deactivate this webhook?")) return;
+    setError("");
     try {
-      await fetch(`${API_BASE}/webhooks/${id}`, {
-        method: "DELETE",
-        headers: getAuthHeaders(),
-      });
+      await apiDeleteWebhook(id);
       fetchWebhooks();
     } catch (e) {
-      console.error(e);
+      console.error("Failed to delete webhook:", e);
+      setError(e instanceof Error ? e.message : "Failed to delete webhook");
     }
   }
 
@@ -91,14 +72,11 @@ export default function WebhooksPage() {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/webhooks/${id}/deliveries`, {
-        headers: getAuthHeaders(),
-      });
-      const data = await res.json();
+      const data = await getWebhookDeliveries(id);
       setDeliveries((prev) => ({ ...prev, [id]: Array.isArray(data) ? data : [] }));
       setExpandedId(id);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch deliveries:", e);
     }
   }
 
@@ -111,6 +89,12 @@ export default function WebhooksPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">Webhook Management</h1>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
+          {error}
+        </div>
+      )}
 
       {/* Create new webhook */}
       <div className="bg-white/5 rounded-xl border border-white/10 p-6">
@@ -145,7 +129,7 @@ export default function WebhooksPage() {
             </div>
           </div>
           <button
-            onClick={createWebhook}
+            onClick={handleCreate}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
           >
             <Plus size={16} /> Create
@@ -188,7 +172,7 @@ export default function WebhooksPage() {
                     History
                   </button>
                   <button
-                    onClick={() => deleteWebhook(w.id)}
+                    onClick={() => handleDelete(w.id)}
                     className="p-1 text-gray-500 hover:text-red-400 transition-colors"
                   >
                     <Trash2 size={16} />
@@ -213,7 +197,7 @@ export default function WebhooksPage() {
                               d.success ? "text-emerald-400" : "text-red-400"
                             }
                           >
-                            {d.success ? "✓" : "✗"} {d.status_code ?? "—"}
+                            {d.success ? "\u2713" : "\u2717"} {d.status_code ?? "\u2014"}
                           </span>
                           <span className="text-gray-500 text-xs">
                             {new Date(d.created_at).toLocaleString()}
