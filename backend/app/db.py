@@ -17,22 +17,37 @@ _engine = None
 _session_factory = None
 
 
+def _build_database_url(url: str) -> str:
+    """Normalize the DB URL for asyncpg driver and Supabase compatibility."""
+    # Convert plain postgres:// or postgresql:// to asyncpg driver scheme
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
 def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        database_url = _build_database_url(settings.database_url)
         engine_kwargs: dict = {
             "echo": settings.log_level.upper() == "DEBUG",
         }
-        if "postgresql" in settings.database_url or "postgres" in settings.database_url:
+        if "postgresql" in database_url:
+            # Supabase requires SSL; pass via connect_args for asyncpg
+            import ssl as ssl_module
+            ssl_ctx = ssl_module.create_default_context()
             engine_kwargs.update({
                 "pool_size": settings.db_pool_size,
                 "max_overflow": settings.db_pool_overflow,
                 "pool_recycle": settings.db_pool_recycle,
                 "pool_pre_ping": True,
                 "pool_timeout": 30,
+                "connect_args": {"ssl": ssl_ctx},
             })
-        _engine = create_async_engine(settings.database_url, **engine_kwargs)
+        _engine = create_async_engine(database_url, **engine_kwargs)
     return _engine
 
 
