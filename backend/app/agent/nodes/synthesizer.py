@@ -1,7 +1,7 @@
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
-from app.config import get_synthesis_llm, get_settings
+from app.config import get_synthesis_llm, get_reasoning_llm, get_planning_llm, get_settings
 from app.agent.state import AgentState
 from app.utils import async_retry, extract_usage, estimate_cost
 
@@ -11,6 +11,46 @@ logger = logging.getLogger(__name__)
 @async_retry(max_retries=2)
 async def _invoke_synthesizer(llm, messages):
     return await llm.ainvoke(messages)
+
+
+async def _invoke_with_fallback(primary_llm, messages, results: list, non_source_tokens: int):
+    """Invoke synthesis with a 3-level fallback chain on overflow/rate-limit.
+
+    Level 1: primary synthesis LLM (gpt-oss-20b, fast, small context)
+    Level 2: reasoning LLM (llama-4-scout, 131k context, high quality) — best fallback
+    Level 3: planning LLM (llama-3.1-8b, 128k context) — last resort, quality drops
+    """
+    try:
+        return await _invoke_synthesizer(primary_llm, messages)
+    except Exception as err:
+        err_lower = str(err).lower()
+        if not any(sig in err_lower for sig in _OVERFLOW_SIGNALS):
+            raise  # propagate non-overflow errors immediately
+
+        logger.warning(
+            "[synthesizer] primary LLM overflow/rate-limit (%s...) — trying reasoning LLM",
+            str(err)[:80],
+        )
+
+    # Level 2: reasoning LLM (llama-4-scout, 131k context) — reuse same messages,
+    # the prompt already fits comfortably in 131k even for large profiles.
+    try:
+        reasoning_llm = get_reasoning_llm(max_tokens=4096)
+        return await _invoke_synthesizer(reasoning_llm, messages)
+    except Exception as err2:
+        err_lower2 = str(err2).lower()
+        if not any(sig in err_lower2 for sig in _OVERFLOW_SIGNALS):
+            raise
+
+        logger.warning(
+            "[synthesizer] reasoning LLM also failed (%s...) — falling back to planning LLM",
+            str(err2)[:80],
+        )
+
+    # Level 3: planning LLM — 128k context but 8B quality, last resort
+    logger.warning("[synthesizer] using planning LLM as last-resort synthesis fallback")
+    planning_llm = get_planning_llm(max_tokens=2048)
+    return await _invoke_synthesizer(planning_llm, messages)
 
 
 SYNTHESIZER_SYSTEM_PROMPT = """You are an elite intelligence analyst producing the most comprehensive person dossier possible.
@@ -82,47 +122,95 @@ def _format_input_for_prompt(input_data: dict) -> str:
     return "\n".join(parts) if parts else "Unknown"
 
 
-_MAX_SOURCES_IN_PROMPT = 50
-_CHARS_TIERS = [
-    (20, 1200),
-    (40, 600),
-    (999, 400),
-]
+# ── Token-budget-aware source selection ──────────────────────────────────────
+#
+# openai/gpt-oss-20b on Groq: 8192-token total context (input + output).
+# We reserve 2048 for output, leaving 6144 for input.
+# After system prompt (~320 tok) + scaffold (analysis, timeline, facts,
+# sentiment — typically 800-1500 tok for complex profiles), roughly
+# 4300-5000 tokens remain for sources.
+#
+# Each source entry = ~15 tok overhead (type/title/url header) + content tokens.
+# 1 token ≈ 4 chars (English).
+#
+# Strategy: estimate non-source tokens first, then fill the remaining budget
+# with as many prioritised sources as possible at adaptive char limits.
+
+_MODEL_INPUT_BUDGET = 6000   # conservative: 8192 total − 2048 output − 144 safety
+_SYS_PROMPT_TOKENS  = 320    # measured: SYNTHESIZER_SYSTEM_PROMPT ≈ 320 tokens
+_SOURCE_OVERHEAD    = 15     # tokens per source entry (header lines)
+_CHARS_PER_TOKEN    = 4      # English prose approximation
+
+_HIGH_VALUE_SOURCES = {
+    "linkedin_profile", "linkedin_posts", "github", "twitter",
+    "crunchbase", "scholar", "news", "youtube_transcript",
+}
 
 
-def _truncate_source(content: str, max_chars: int = 1200) -> str:
-    if not content:
-        return ""
-    return content[:max_chars]
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // _CHARS_PER_TOKEN)
 
 
-def _select_and_truncate_sources(results: list[dict]) -> list[str]:
-    """Pick the most informative sources and truncate content adaptively."""
-    n = len(results)
-    max_chars = 1200
-    for threshold, chars in _CHARS_TIERS:
-        if n <= threshold:
-            max_chars = chars
-            break
+def _select_and_truncate_sources(
+    results: list[dict],
+    non_source_tokens: int = 1200,
+) -> list[str]:
+    """Pick the most informative sources within the token budget.
 
-    high_value = {"linkedin_profile", "linkedin_posts", "github", "twitter",
-                  "crunchbase", "scholar", "news", "youtube_transcript"}
+    Args:
+        results: All search results from the agent state.
+        non_source_tokens: Estimated tokens already consumed by the system
+            prompt + non-source user-prompt sections (analysis JSON, timeline,
+            facts, sentiment).  Caller should pass a measured estimate; the
+            default 1200 is a safe conservative value.
+    """
+    available = _MODEL_INPUT_BUDGET - non_source_tokens
+    # At least 500 tokens for sources even if scaffolding is huge
+    available = max(500, available)
+
+    # Sort: high-value platform first, then by search score descending
     prioritised = sorted(
-        enumerate(results),
-        key=lambda t: (
-            0 if t[1].get("source_type") in high_value else 1,
-            -(t[1].get("score", 0) or 0),
+        results,
+        key=lambda r: (
+            0 if r.get("source_type") in _HIGH_VALUE_SOURCES else 1,
+            -(r.get("score", 0) or 0),
         ),
     )
 
-    texts = []
-    for i, r in prioritised[:_MAX_SOURCES_IN_PROMPT]:
-        texts.append(
+    texts: list[str] = []
+    tokens_used = 0
+
+    for i, r in enumerate(prioritised):
+        if tokens_used >= available:
+            break
+
+        content = r.get("content") or r.get("snippet") or ""
+        remaining_for_this = available - tokens_used - _SOURCE_OVERHEAD
+        if remaining_for_this <= 0:
+            break
+
+        max_chars = remaining_for_this * _CHARS_PER_TOKEN
+        # Floor: always include at least 150 chars so the source is meaningful
+        max_chars = max(150, min(max_chars, 1200))
+        snippet = content[:int(max_chars)]
+
+        entry = (
             f"[Source {i}] ({r.get('source_type', 'web')}) {r.get('title', '')}\n"
             f"URL: {r.get('url', '')}\n"
-            f"Content: {_truncate_source(r.get('content', ''), max_chars)}"
+            f"Content: {snippet}"
         )
+        entry_tokens = _estimate_tokens(entry) + _SOURCE_OVERHEAD
+        tokens_used += entry_tokens
+        texts.append(entry)
+
+    logger.debug(
+        "[synthesizer] selected %d/%d sources using ~%d/%d input tokens",
+        len(texts), len(results), tokens_used + non_source_tokens, _MODEL_INPUT_BUDGET,
+    )
     return texts
+
+
+_OVERFLOW_SIGNALS = ("rate limit", "rate_limit", "429", "413", "request too large", "context_length")
 
 
 async def synthesize_profile(state: AgentState) -> dict:
@@ -136,7 +224,8 @@ async def synthesize_profile(state: AgentState) -> dict:
     best_idx = analysis.get("best_match_index", 0)
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
 
-    sources_text = _select_and_truncate_sources(results)
+    # ── Build non-source sections first so we can measure their token cost ──
+    input_str = _format_input_for_prompt(input_data)
 
     analysis_text = ""
     if best_idx >= 0 and people:
@@ -155,42 +244,34 @@ async def synthesize_profile(state: AgentState) -> dict:
     sentiment = state.get("sentiment", {})
     sentiment_str = ""
     if sentiment and sentiment.get("summary"):
-        sentiment_str = f"\nSentiment analysis:\n- Reputation score: {sentiment.get('reputation_score', 'N/A')}/100\n- Key themes: {', '.join(sentiment.get('key_themes', []))}\n- Summary: {sentiment.get('summary', '')}"
+        sentiment_str = (
+            f"\nSentiment analysis:\n- Reputation score: {sentiment.get('reputation_score', 'N/A')}/100"
+            f"\n- Key themes: {', '.join(sentiment.get('key_themes', []))}"
+            f"\n- Summary: {sentiment.get('summary', '')}"
+        )
 
-    input_str = _format_input_for_prompt(input_data)
+    # Measure the non-source prompt content so source selection knows its budget
+    scaffold = f"Create the most comprehensive profile possible for:\n{input_str}\n\n{analysis_text}{career_timeline_str}{facts_str}{sentiment_str}"
+    non_source_tokens = _SYS_PROMPT_TOKENS + _estimate_tokens(scaffold) + 50  # +50 for Sources header
 
+    sources_text = _select_and_truncate_sources(results, non_source_tokens=non_source_tokens)
     all_sources_str = "\n\n".join(sources_text)
 
-    user_prompt = f"""Create the most comprehensive profile possible for:
-{input_str}
+    user_prompt = (
+        f"{scaffold}\n\n"
+        f"Sources ({len(sources_text)} of {len(results)} total):\n{all_sources_str}\n\n"
+        "IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, "
+        "leadership, industry impact, and recent activity. Use specific facts, numbers, and "
+        "dates from the sources. Every field should be as complete as possible. "
+        "Rate each source's confidence based on how authoritative and relevant it is."
+    )
 
-{analysis_text}
-{career_timeline_str}
-{facts_str}
-{sentiment_str}
+    messages = [
+        SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
+        HumanMessage(content=user_prompt),
+    ]
 
-Sources ({len(sources_text)} of {len(results)} total):
-{all_sources_str}
-
-IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, leadership, industry impact, and recent activity. Use specific facts, numbers, and dates from the sources. Every field should be as complete as possible. Rate each source's confidence based on how authoritative and relevant it is."""
-
-    try:
-        response = await _invoke_synthesizer(llm, [
-            SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
-            HumanMessage(content=user_prompt),
-        ])
-    except Exception as synth_err:
-        err_str = str(synth_err).lower()
-        if any(t in err_str for t in ("rate limit", "rate_limit", "429", "413", "request too large")):
-            logger.warning("Synthesis LLM rate-limited/too-large, falling back to planning LLM")
-            from app.config import get_planning_llm
-            fallback_llm = get_planning_llm(max_tokens=4096)
-            response = await _invoke_synthesizer(fallback_llm, [
-                SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
-                HumanMessage(content=user_prompt),
-            ])
-        else:
-            raise
+    response = await _invoke_with_fallback(llm, messages, results, non_source_tokens)
 
     usage = extract_usage(response)
     model_name = get_settings().synthesis_model

@@ -204,12 +204,16 @@ def get_synthesis_llm():
             or settings.groq_api_key
             or settings.openai_api_key
         )
+        # openai/gpt-oss-20b on Groq has an 8192-token total context window.
+        # A complete profile JSON (400-600 word bio + all fields) uses ~1400 tokens
+        # of output, so 2048 is ample.  Using 2048 (not 4096) doubles the input
+        # budget from 4096 → 6144 tokens — enough for 30+ sources at 300 chars each.
         return ChatOpenAI(
             model=model,
             api_key=api_key,
             base_url=settings.synthesis_base_url,
             temperature=0,
-            max_tokens=4096,
+            max_tokens=2048,
             model_kwargs={"response_format": {"type": "json_object"}},
         )
 
