@@ -26,7 +26,8 @@ class Settings(BaseSettings):
 
     # Planning/analysis LLM — non-reasoning model, fast JSON output
     planning_model: str = "gpt-4.1-mini"
-    planning_base_url: str = ""  # Override for Groq/Together AI
+    planning_base_url: str = ""   # Override for Groq/Together AI
+    planning_api_key: str = ""    # Explicit API key for the planning provider
 
     # Synthesis LLM — reasoning model for richer profiles
     synthesis_model: str = "deepseek-chat"
@@ -85,7 +86,12 @@ def get_settings() -> Settings:
 
 
 def _resolve_api_key(settings: Settings, base_url: str | None) -> str:
-    """Pick the right API key based on the base_url provider."""
+    """Pick the right API key for the planning LLM.
+
+    Priority: explicit PLANNING_API_KEY > provider-specific key > OpenAI key.
+    """
+    if settings.planning_api_key:
+        return settings.planning_api_key
     if base_url:
         if "groq" in base_url and settings.groq_api_key:
             return settings.groq_api_key

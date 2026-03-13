@@ -460,6 +460,9 @@ async def _run_discovery(job_id: str, input_data: dict):
                     if key in existing_keys or key in new_keys:
                         continue
                     new_keys.add(key)
+                    # Prefer LLM-scored values (set by analyzer.py) over static heuristics
+                    rel_score = sr.get("relevance_score", sr.get("score", 0.5))
+                    src_rel = sr.get("source_reliability", _get_source_reliability(stype))
                     ps = PersonSource(
                         person_id=person.id,
                         source_type=stype,
@@ -468,8 +471,9 @@ async def _run_discovery(job_id: str, input_data: dict):
                         title=sr.get("title", ""),
                         raw_content=sr.get("content", "")[:5000],
                         structured_data=json.dumps(sr.get("structured")) if sr.get("structured") else None,
-                        relevance_score=sr.get("score", 0.5),
-                        source_reliability=_get_source_reliability(stype),
+                        relevance_score=float(rel_score),
+                        source_reliability=float(src_rel),
+                        scorer_reason=(sr.get("scorer_reason") or "")[:200] or None,
                     )
                     session.add(ps)
 
@@ -1635,6 +1639,7 @@ def _source_to_dict(src: PersonSource) -> dict:
         "title": src.title,
         "relevance_score": round(src.relevance_score, 3),
         "source_reliability": round(src.source_reliability, 3),
+        "scorer_reason": src.scorer_reason or None,
         "fetched_at": src.fetched_at.isoformat() if src.fetched_at else None,
     }
 

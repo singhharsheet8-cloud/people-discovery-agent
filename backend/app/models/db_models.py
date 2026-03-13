@@ -63,6 +63,7 @@ class PersonSource(Base):
     structured_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
     source_reliability: Mapped[float] = mapped_column(Float, default=0.5)
+    scorer_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
