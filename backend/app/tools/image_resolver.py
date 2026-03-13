@@ -230,8 +230,4 @@ async def _serpapi_knowledge_graph_image(
 # ---------------------------------------------------------------------------
 
 async def _cache(cache_key: str, image_url: str) -> None:
-    await set_cached_results(
-        cache_key, _CACHE_TOOL,
-        [{"image_url": image_url}],
-        ttl_seconds=86400 * 7,  # cache image URLs for 7 days
-    )
+    await set_cached_results(cache_key, _CACHE_TOOL, [{"image_url": image_url}])
