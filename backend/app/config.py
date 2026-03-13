@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     hubspot_api_key: str = ""
 
+    # SUPABASE_DATABASE_URL takes priority over DATABASE_URL.
+    # This lets us override Railway's auto-injected DATABASE_URL (from its
+    # own managed Postgres plugin) without deleting the plugin.
+    supabase_database_url: str = ""
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
     db_pool_size: int = 10
     db_pool_overflow: int = 20

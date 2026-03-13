@@ -31,7 +31,10 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        database_url = _build_database_url(settings.database_url)
+        # Prefer SUPABASE_DATABASE_URL when set — this overrides Railway's
+        # auto-injected DATABASE_URL without needing to remove the Postgres plugin.
+        raw_url = settings.supabase_database_url or settings.database_url
+        database_url = _build_database_url(raw_url)
         engine_kwargs: dict = {
             "echo": settings.log_level.upper() == "DEBUG",
         }
@@ -133,7 +136,8 @@ async def _run_column_migrations() -> None:
     from sqlalchemy import text
 
     settings = get_settings()
-    if "postgresql" not in settings.database_url and "postgres" not in settings.database_url:
+    active_url = settings.supabase_database_url or settings.database_url
+    if "postgresql" not in active_url and "postgres" not in active_url:
         return  # SQLite picks up new columns from create_all
 
     migrations = [
