@@ -509,7 +509,7 @@ async def _run_discovery(job_id: str, input_data: dict):
             "total_cost": result.get("cost_tracker", {}).get("total", 0.0),
             "latency_ms": round(elapsed_ms),
             "sources_hit": len(result.get("search_results", [])),
-            "new_sources_added": len(new_urls),
+            "new_sources_added": len(new_keys),
         })
 
     except Exception as e:
