@@ -166,12 +166,42 @@ export default function PersonDetailPage() {
   const sourceGroups = groupSourcesByPlatform(person.sources || []);
   const sourceTabs = Object.keys(sourceGroups);
 
+  const initials = person.name
+    .split(" ")
+    .filter(Boolean)
+    .map((n) => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "?";
+
   return (
     <div className="space-y-6">
       {/* Profile header */}
       <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="flex items-start gap-4">
+            {/* Profile image or initials avatar */}
+            <div className="shrink-0">
+              {person.image_url ? (
+                <img
+                  src={person.image_url}
+                  alt={person.name}
+                  className="w-16 h-16 rounded-xl object-cover ring-2 ring-white/10 shadow-lg"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                    const next = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (next) next.style.display = "flex";
+                  }}
+                />
+              ) : null}
+              <div
+                className="w-16 h-16 rounded-xl bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg"
+                style={{ display: person.image_url ? "none" : "flex" }}
+              >
+                {initials}
+              </div>
+            </div>
+            <div>
             <h1 className="text-2xl font-bold text-white">{person.name}</h1>
             <div className="flex flex-wrap items-center gap-3 mt-2 text-gray-400">
               {person.current_role && (
@@ -201,6 +231,7 @@ export default function PersonDetailPage() {
               {Math.round(person.confidence_score * 100)}% ·{" "}
               {confidenceLabel(person.confidence_score)}
             </span>
+            </div>
           </div>
           <div className="flex gap-2 flex-wrap">
             <Link
