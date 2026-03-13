@@ -82,10 +82,47 @@ def _format_input_for_prompt(input_data: dict) -> str:
     return "\n".join(parts) if parts else "Unknown"
 
 
+_MAX_SOURCES_IN_PROMPT = 50
+_CHARS_TIERS = [
+    (20, 1200),
+    (40, 600),
+    (999, 400),
+]
+
+
 def _truncate_source(content: str, max_chars: int = 1200) -> str:
     if not content:
         return ""
     return content[:max_chars]
+
+
+def _select_and_truncate_sources(results: list[dict]) -> list[str]:
+    """Pick the most informative sources and truncate content adaptively."""
+    n = len(results)
+    max_chars = 1200
+    for threshold, chars in _CHARS_TIERS:
+        if n <= threshold:
+            max_chars = chars
+            break
+
+    high_value = {"linkedin_profile", "linkedin_posts", "github", "twitter",
+                  "crunchbase", "scholar", "news", "youtube_transcript"}
+    prioritised = sorted(
+        enumerate(results),
+        key=lambda t: (
+            0 if t[1].get("source_type") in high_value else 1,
+            -(t[1].get("score", 0) or 0),
+        ),
+    )
+
+    texts = []
+    for i, r in prioritised[:_MAX_SOURCES_IN_PROMPT]:
+        texts.append(
+            f"[Source {i}] ({r.get('source_type', 'web')}) {r.get('title', '')}\n"
+            f"URL: {r.get('url', '')}\n"
+            f"Content: {_truncate_source(r.get('content', ''), max_chars)}"
+        )
+    return texts
 
 
 async def synthesize_profile(state: AgentState) -> dict:
@@ -99,13 +136,7 @@ async def synthesize_profile(state: AgentState) -> dict:
     best_idx = analysis.get("best_match_index", 0)
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
 
-    sources_text = []
-    for i, r in enumerate(results):
-        sources_text.append(
-            f"[Source {i}] ({r.get('source_type', 'web')}) {r.get('title', '')}\n"
-            f"URL: {r.get('url', '')}\n"
-            f"Content: {_truncate_source(r.get('content', ''))}"
-        )
+    sources_text = _select_and_truncate_sources(results)
 
     analysis_text = ""
     if best_idx >= 0 and people:
@@ -119,7 +150,7 @@ async def synthesize_profile(state: AgentState) -> dict:
     deduped_facts = enrichment.get("deduplicated_facts", [])
     facts_str = ""
     if deduped_facts:
-        facts_str = f"\nVerified facts:\n" + "\n".join(f"- {f}" for f in deduped_facts)
+        facts_str = "\nVerified facts:\n" + "\n".join(f"- {f}" for f in deduped_facts)
 
     sentiment = state.get("sentiment", {})
     sentiment_str = ""
@@ -138,15 +169,28 @@ async def synthesize_profile(state: AgentState) -> dict:
 {facts_str}
 {sentiment_str}
 
-ALL Sources ({len(sources_text)} total):
+Sources ({len(sources_text)} of {len(results)} total):
 {all_sources_str}
 
 IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, leadership, industry impact, and recent activity. Use specific facts, numbers, and dates from the sources. Every field should be as complete as possible. Rate each source's confidence based on how authoritative and relevant it is."""
 
-    response = await _invoke_synthesizer(llm, [
-        SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt),
-    ])
+    try:
+        response = await _invoke_synthesizer(llm, [
+            SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ])
+    except Exception as synth_err:
+        err_str = str(synth_err).lower()
+        if any(t in err_str for t in ("rate limit", "rate_limit", "429", "413", "request too large")):
+            logger.warning("Synthesis LLM rate-limited/too-large, falling back to planning LLM")
+            from app.config import get_planning_llm
+            fallback_llm = get_planning_llm(max_tokens=4096)
+            response = await _invoke_synthesizer(fallback_llm, [
+                SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt),
+            ])
+        else:
+            raise
 
     usage = extract_usage(response)
     model_name = get_settings().synthesis_model
