@@ -40,7 +40,7 @@ async def search_patents(
         for item in organic[:max_results]:
             title = item.get("title", "")
             patent_id = item.get("patent_id", "")
-            link = item.get("pdf", "") or f"https://patents.google.com/patent/{patent_id}"
+            link = item.get("patent_link", "") or item.get("pdf", "") or f"https://patents.google.com/patent/{patent_id}"
             snippet = item.get("snippet", "")
             filing_date = item.get("filing_date", "")
             grant_date = item.get("grant_date", "")

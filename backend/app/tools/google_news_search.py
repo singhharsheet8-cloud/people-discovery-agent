@@ -43,17 +43,18 @@ async def search_google_news(
             title = item.get("title", "")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
-            source_info = item.get("source", {})
+            source_raw = item.get("source", {})
+            source_name = source_raw.get("name", "") if isinstance(source_raw, dict) else str(source_raw)
             date = item.get("date", "")
             results.append(
                 {
                     "title": title,
                     "url": link,
-                    "content": f"{snippet} (Source: {source_info.get('name', 'Unknown')}, {date})",
-                    "source_type": "news",
+                    "content": f"{snippet} (Source: {source_name or 'Unknown'}, {date})",
+                    "source_type": "google_news",
                     "score": 0.85,
                     "structured": {
-                        "source_name": source_info.get("name", ""),
+                        "source_name": source_name,
                         "published_date": date,
                         "thumbnail": item.get("thumbnail", ""),
                     },

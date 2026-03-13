@@ -71,6 +71,7 @@ async def search_stackoverflow(
             )
     except Exception as e:
         logger.error(f"Stack Overflow user search failed: {e}")
+        results = []
 
     search_params = {
         "q": person_name,

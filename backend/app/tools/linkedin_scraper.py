@@ -65,6 +65,7 @@ async def scrape_linkedin_posts(
 
     api_key = get_settings().apify_api_key
     if not api_key:
+        logger.warning("APIFY_API_KEY not set, skipping LinkedIn posts scrape")
         return []
 
     actor_id = "artificially~linkedin-posts-scraper"
