@@ -1,4 +1,4 @@
-"""Reddit mention search via Apify Reddit Intelligence Scraper."""
+"""Reddit mention search — SerpAPI primary, Apify fallback."""
 
 import logging
 
@@ -14,15 +14,77 @@ APIFY_BASE = "https://api.apify.com/v2"
 async def search_reddit_mentions(
     person_name: str, max_results: int = 10
 ) -> list[dict]:
-    """Search Reddit for mentions of a person."""
+    """Search Reddit for mentions — SerpAPI first, Apify fallback."""
     cache_key = f"reddit:{person_name}"
     cached = await get_cached_results(cache_key, "reddit")
     if cached is not None:
         return cached
 
+    results = await _serpapi_reddit(person_name, max_results)
+    if not results:
+        results = await _apify_reddit(person_name, max_results)
+
+    if results:
+        await set_cached_results(cache_key, "reddit", results)
+    return results
+
+
+async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
+    """Search Google for Reddit threads mentioning this person."""
+    api_key = get_settings().serpapi_api_key
+    if not api_key:
+        return []
+
+    try:
+        params = {
+            "engine": "google",
+            "q": f"site:reddit.com \"{person_name}\"",
+            "api_key": api_key,
+            "num": max_results + 5,
+        }
+        resp = await resilient_request(
+            "get", "https://serpapi.com/search.json", params=params, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        organic = data.get("organic_results", [])
+
+        results = []
+        for item in organic:
+            url = item.get("link", "")
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            if not url or "reddit.com" not in url:
+                continue
+            subreddit = ""
+            parts = url.split("/r/")
+            if len(parts) > 1:
+                subreddit = parts[1].split("/")[0]
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "content": snippet,
+                    "source_type": "reddit",
+                    "score": 0.8,
+                    "structured": {
+                        "subreddit": subreddit,
+                    },
+                }
+            )
+
+        if results:
+            logger.info(f"SerpAPI Reddit found {len(results)} results for {person_name}")
+        return results[:max_results]
+    except Exception as e:
+        logger.warning(f"SerpAPI Reddit failed for {person_name}: {e}")
+        return []
+
+
+async def _apify_reddit(person_name: str, max_results: int) -> list[dict]:
+    """Fallback: Apify Reddit Intelligence Scraper."""
     api_key = get_settings().apify_api_key
     if not api_key:
-        logger.warning("APIFY_API_KEY not set, skipping Reddit search")
         return []
 
     actor_id = "apage~reddit-intelligence-scraper"
@@ -61,8 +123,9 @@ async def search_reddit_mentions(
                     },
                 }
             )
-        await set_cached_results(cache_key, "reddit", results)
+        if results:
+            logger.info(f"Apify Reddit found {len(results)} results for {person_name}")
         return results
     except Exception as e:
-        logger.error(f"Reddit search failed: {e}")
+        logger.warning(f"Apify Reddit failed for {person_name}: {e}")
         return []

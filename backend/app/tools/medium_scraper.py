@@ -1,4 +1,4 @@
-"""Medium article search via Apify with SerpAPI fallback."""
+"""Medium article search — SerpAPI primary, Apify fallback."""
 
 import logging
 
@@ -14,62 +14,23 @@ APIFY_BASE = "https://api.apify.com/v2"
 async def search_medium_articles(
     person_name: str, max_results: int = 5
 ) -> list[dict]:
-    """Search Medium for articles — Apify first, SerpAPI fallback."""
+    """Search Medium for articles — SerpAPI first, Apify fallback."""
     cache_key = f"medium:{person_name}"
     cached = await get_cached_results(cache_key, "medium")
     if cached is not None:
         return cached
 
-    results = await _apify_medium(person_name, max_results)
+    results = await _serpapi_medium(person_name, max_results)
     if not results:
-        results = await _serpapi_medium(person_name, max_results)
+        results = await _apify_medium(person_name, max_results)
 
     if results:
         await set_cached_results(cache_key, "medium", results)
     return results
 
 
-async def _apify_medium(person_name: str, max_results: int) -> list[dict]:
-    api_key = get_settings().apify_api_key
-    if not api_key:
-        logger.info("APIFY_API_KEY not set, skipping Apify Medium search")
-        return []
-
-    actor_id = "cloud9_ai~medium-article-scraper"
-    run_url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
-    payload = {"query": person_name, "maxResults": max_results}
-
-    try:
-        resp = await resilient_request(
-            "post", run_url, json=payload, params={"token": api_key}, timeout=90
-        )
-        resp.raise_for_status()
-        items = resp.json()
-        results = []
-        for item in items:
-            content = item.get("text", item.get("content", item.get("description", "")))[:2000]
-            results.append(
-                {
-                    "title": item.get("title", f"Medium: {person_name}"),
-                    "url": item.get("url", item.get("link", "")),
-                    "content": content,
-                    "source_type": "medium",
-                    "score": 0.85,
-                    "structured": {
-                        "author": item.get("author", ""),
-                        "claps": item.get("claps", 0),
-                        "published": item.get("published", item.get("date", "")),
-                    },
-                }
-            )
-        return results
-    except Exception as e:
-        logger.warning(f"Apify Medium search failed: {e}")
-        return []
-
-
 async def _serpapi_medium(person_name: str, max_results: int) -> list[dict]:
-    """Fallback: search Google for Medium articles by or about this person."""
+    """Search Google for Medium articles by or about this person."""
     api_key = get_settings().serpapi_api_key
     if not api_key:
         return []
@@ -108,8 +69,48 @@ async def _serpapi_medium(person_name: str, max_results: int) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI Medium fallback found {len(results)} articles for {person_name}")
+            logger.info(f"SerpAPI Medium found {len(results)} articles for {person_name}")
         return results[:max_results]
     except Exception as e:
-        logger.warning(f"SerpAPI Medium fallback failed: {e}")
+        logger.warning(f"SerpAPI Medium failed: {e}")
+        return []
+
+
+async def _apify_medium(person_name: str, max_results: int) -> list[dict]:
+    api_key = get_settings().apify_api_key
+    if not api_key:
+        return []
+
+    actor_id = "cloud9_ai~medium-article-scraper"
+    run_url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
+    payload = {"query": person_name, "maxResults": max_results}
+
+    try:
+        resp = await resilient_request(
+            "post", run_url, json=payload, params={"token": api_key}, timeout=90
+        )
+        resp.raise_for_status()
+        items = resp.json()
+        results = []
+        for item in items:
+            content = item.get("text", item.get("content", item.get("description", "")))[:2000]
+            results.append(
+                {
+                    "title": item.get("title", f"Medium: {person_name}"),
+                    "url": item.get("url", item.get("link", "")),
+                    "content": content,
+                    "source_type": "medium",
+                    "score": 0.85,
+                    "structured": {
+                        "author": item.get("author", ""),
+                        "claps": item.get("claps", 0),
+                        "published": item.get("published", item.get("date", "")),
+                    },
+                }
+            )
+        if results:
+            logger.info(f"Apify Medium found {len(results)} articles for {person_name}")
+        return results
+    except Exception as e:
+        logger.warning(f"Apify Medium failed: {e}")
         return []

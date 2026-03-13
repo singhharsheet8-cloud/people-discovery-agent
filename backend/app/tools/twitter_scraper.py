@@ -1,4 +1,4 @@
-"""Twitter/X profile scraping via Apify with SerpAPI fallback."""
+"""Twitter/X profile scraping — SerpAPI primary, Apify fallback."""
 
 import json
 import logging
@@ -13,7 +13,7 @@ APIFY_BASE = "https://api.apify.com/v2"
 
 
 async def scrape_twitter_profile(handle: str) -> list[dict]:
-    """Scrape a Twitter/X profile — tries Apify first, then SerpAPI fallback."""
+    """Scrape a Twitter/X profile — SerpAPI first, Apify fallback."""
     clean = handle.lstrip("@").strip()
     if not clean:
         return []
@@ -22,21 +22,64 @@ async def scrape_twitter_profile(handle: str) -> list[dict]:
     if cached is not None:
         return cached
 
-    results = await _try_apify(clean)
-
+    results = await _try_serpapi(clean)
     if not results:
-        results = await _try_serpapi(clean)
+        results = await _try_apify(clean)
 
     if results:
         await set_cached_results(clean, "twitter", results)
     return results
 
 
+async def _try_serpapi(handle: str) -> list[dict]:
+    """Use SerpAPI to search Twitter/X for a handle's posts and profile."""
+    api_key = get_settings().serpapi_api_key
+    if not api_key:
+        return []
+
+    try:
+        params = {
+            "engine": "google",
+            "q": f"site:x.com OR site:twitter.com @{handle}",
+            "api_key": api_key,
+            "num": 10,
+        }
+        resp = await resilient_request(
+            "get", "https://serpapi.com/search.json", params=params, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        organic = data.get("organic_results", [])
+
+        results = []
+        for item in organic:
+            url = item.get("link", "")
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            if not url:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "content": snippet,
+                    "source_type": "twitter",
+                    "score": 0.8,
+                }
+            )
+
+        if results:
+            logger.info(f"SerpAPI Twitter found {len(results)} results for @{handle}")
+        return results
+    except Exception as e:
+        logger.warning(f"SerpAPI Twitter failed for @{handle}: {e}")
+        return []
+
+
 async def _try_apify(handle: str) -> list[dict]:
-    """Attempt Apify actor-based Twitter scrape."""
+    """Fallback: Apify actor-based Twitter scrape."""
     api_key = get_settings().apify_api_key
     if not api_key:
-        logger.info("APIFY_API_KEY not set, skipping Apify Twitter scrape")
         return []
 
     actor_id = "motx11~twitter-x-scraper-fxtwitter"
@@ -97,53 +140,9 @@ async def _try_apify(handle: str) -> list[dict]:
                         "structured": item,
                     }
                 )
-        return results
-    except Exception as e:
-        logger.warning(f"Apify Twitter scrape failed for @{handle}: {e}")
-        return []
-
-
-async def _try_serpapi(handle: str) -> list[dict]:
-    """Fallback: use SerpAPI to search Twitter/X for a handle's posts and profile."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        logger.info("SERPAPI_API_KEY not set, skipping SerpAPI Twitter fallback")
-        return []
-
-    try:
-        params = {
-            "engine": "google",
-            "q": f"site:x.com OR site:twitter.com @{handle}",
-            "api_key": api_key,
-            "num": 10,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        organic = data.get("organic_results", [])
-
-        results = []
-        for item in organic:
-            url = item.get("link", "")
-            title = item.get("title", "")
-            snippet = item.get("snippet", "")
-            if not url:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "content": snippet,
-                    "source_type": "twitter",
-                    "score": 0.8,
-                }
-            )
-
         if results:
-            logger.info(f"SerpAPI Twitter fallback found {len(results)} results for @{handle}")
+            logger.info(f"Apify Twitter found {len(results)} results for @{handle}")
         return results
     except Exception as e:
-        logger.warning(f"SerpAPI Twitter fallback failed for @{handle}: {e}")
+        logger.warning(f"Apify Twitter failed for @{handle}: {e}")
         return []
