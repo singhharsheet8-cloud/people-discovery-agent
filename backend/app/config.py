@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # own managed Postgres plugin) without deleting the plugin.
     supabase_database_url: str = ""
     database_url: str = "sqlite+aiosqlite:///./discovery.db"
+
+    # Supabase Storage — for permanent profile image hosting.
+    # supabase_url: the project REST URL (e.g. https://<id>.supabase.co)
+    # supabase_service_key: service_role JWT from Supabase dashboard → Settings → API
+    supabase_url: str = ""
+    supabase_service_key: str = ""
     db_pool_size: int = 10
     db_pool_overflow: int = 20
     db_pool_recycle: int = 1800
