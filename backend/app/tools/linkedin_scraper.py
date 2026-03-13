@@ -169,7 +169,11 @@ async def _apify_posts(person_name: str, max_posts: int) -> list[dict]:
 
 
 async def search_linkedin_by_name(person_name: str) -> list[dict]:
-    """Find a person's LinkedIn profile via SerpAPI Google search by name."""
+    """Find a person's LinkedIn profile via SerpAPI Google search by name.
+
+    Uses a canonicalized URL (stripping query params and trailing slashes)
+    to avoid exact-URL dedup collisions with Tavily results.
+    """
     cache_key = f"linkedin_profile_name:{person_name}"
     cached = await get_cached_results(cache_key, "linkedin_profile")
     if cached is not None:
@@ -200,10 +204,11 @@ async def search_linkedin_by_name(person_name: str) -> list[dict]:
             snippet = item.get("snippet", "")
             if not url or "linkedin.com/in/" not in url:
                 continue
+            canon_url = url.split("?")[0].rstrip("/")
             results.append(
                 {
                     "title": title,
-                    "url": url,
+                    "url": f"{canon_url}#serpapi",
                     "content": snippet,
                     "source_type": "linkedin_profile",
                     "score": 0.85,

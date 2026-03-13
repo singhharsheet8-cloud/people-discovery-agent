@@ -5,9 +5,10 @@ logger = logging.getLogger(__name__)
 
 
 async def enrich_data(state: AgentState) -> dict:
-    """Extract career timeline and deduplicate facts from analyzed results."""
+    """Extract career timeline, deduplicate facts, and resolve profile image."""
     analysis = state.get("analyzed_results", {})
     results = state.get("search_results", [])
+    input_params = state.get("input", {})
 
     timeline = _extract_career_timeline(analysis, results)
     deduped_facts = _deduplicate_facts(analysis)
@@ -16,17 +17,40 @@ async def enrich_data(state: AgentState) -> dict:
     for r in results:
         platforms.add(r.get("source_type", "unknown"))
 
+    # Resolve profile image via multi-source waterfall (zero extra cost for most cases)
+    image_url = await _resolve_image(
+        name=input_params.get("name", ""),
+        company=input_params.get("company"),
+        results=results,
+    )
+
     enrichment = {
         "career_timeline": timeline,
         "deduplicated_facts": deduped_facts,
         "source_platforms": list(platforms),
         "source_diversity": len(platforms) / 12.0,
+        "image_url": image_url,
     }
 
     logger.info(
-        f"Enrichment: {len(timeline)} timeline entries, {len(deduped_facts)} facts, {len(platforms)} platforms"
+        f"Enrichment: {len(timeline)} timeline entries, {len(deduped_facts)} facts, "
+        f"{len(platforms)} platforms, image={'found' if image_url else 'not found'}"
     )
     return {"enrichment": enrichment, "status": "enrichment_complete"}
+
+
+async def _resolve_image(
+    name: str, company: str | None, results: list[dict]
+) -> str | None:
+    """Run the image resolver waterfall — silently skip on any failure."""
+    if not name:
+        return None
+    try:
+        from app.tools.image_resolver import resolve_profile_image
+        return await resolve_profile_image(name=name, company=company, search_results=results)
+    except Exception as e:
+        logger.warning(f"Image resolution failed for {name!r}: {e}")
+        return None
 
 
 def _extract_career_timeline(analysis: dict, results: list[dict]) -> list[dict]:

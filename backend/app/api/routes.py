@@ -87,6 +87,7 @@ class PersonSummary(BaseModel):
     name: str
     company: str | None = None
     current_role: str | None = None
+    image_url: str | None = None
     confidence_score: float = 0.0
     status: str = "discovered"
     sources_count: int = 0
@@ -101,6 +102,7 @@ class PersonDetail(BaseModel):
     company: str | None = None
     location: str | None = None
     bio: str | None = None
+    image_url: str | None = None
     education: list | None = None
     key_facts: list | None = None
     social_links: dict | None = None
@@ -342,6 +344,10 @@ async def _run_discovery(job_id: str, input_data: dict):
         sentiment = result.get("sentiment", {})
         if sentiment:
             profile["sentiment"] = sentiment
+        # Carry image_url from enrichment stage into the profile dict
+        enrichment = result.get("enrichment", {})
+        if enrichment.get("image_url") and not profile.get("image_url"):
+            profile["image_url"] = enrichment["image_url"]
         elapsed_ms = (time.time() - start_time) * 1000
 
         async with factory() as session:
@@ -376,6 +382,8 @@ async def _run_discovery(job_id: str, input_data: dict):
                     person.confidence_score,
                     profile.get("confidence_score", result.get("confidence_score", 0)),
                 )
+                if profile.get("image_url") and not person.image_url:
+                    person.image_url = profile["image_url"]
                 person.status = "discovered"
 
                 list_fields = ("education", "key_facts", "expertise", "notable_work", "career_timeline")
@@ -404,6 +412,7 @@ async def _run_discovery(job_id: str, input_data: dict):
                     company=profile.get("company"),
                     location=profile.get("location"),
                     bio=profile.get("bio"),
+                    image_url=profile.get("image_url"),
                     confidence_score=profile.get("confidence_score", result.get("confidence_score", 0)),
                     status="discovered",
                 )
@@ -626,6 +635,7 @@ async def list_persons(
                 "name": p.name,
                 "company": p.company,
                 "current_role": p.current_role,
+                "image_url": p.image_url,
                 "confidence_score": p.confidence_score,
                 "status": p.status,
                 "sources_count": src_count,
@@ -1521,6 +1531,7 @@ def _person_to_dict(person: Person) -> dict:
         "company": person.company,
         "location": person.location,
         "bio": person.bio,
+        "image_url": person.image_url,
         "education": person.get_json("education"),
         "key_facts": person.get_json("key_facts"),
         "social_links": person.get_json("social_links"),

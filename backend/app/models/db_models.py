@@ -27,6 +27,7 @@ class Person(Base):
     expertise: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     notable_work: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     career_timeline: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
     reputation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="discovered")

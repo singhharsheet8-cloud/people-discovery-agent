@@ -261,7 +261,21 @@ export default function AdminPersonsPage() {
                     className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition-colors"
                   >
                     <td className="py-3 px-4">
-                      <span className="text-white font-medium">{p.name}</span>
+                      <div className="flex items-center gap-3">
+                        {p.image_url ? (
+                          <img
+                            src={p.image_url}
+                            alt={p.name}
+                            className="w-8 h-8 rounded-full object-cover ring-1 ring-white/10 shrink-0"
+                            onError={(e) => { e.currentTarget.style.display = "none"; }}
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                            {p.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <span className="text-white font-medium">{p.name}</span>
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-gray-400">
                       {p.company || "—"}

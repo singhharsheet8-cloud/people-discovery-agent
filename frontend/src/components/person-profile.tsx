@@ -57,7 +57,24 @@ export function PersonProfile({ profile }: PersonProfileProps) {
       <div className="bg-gradient-to-br from-brand-600/20 via-purple-600/10 to-transparent p-6">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg">
+            {profile.image_url ? (
+              <img
+                src={profile.image_url}
+                alt={name}
+                className="w-16 h-16 rounded-2xl object-cover shadow-lg ring-2 ring-white/10"
+                onError={(e) => {
+                  // fallback to initials on broken image
+                  const t = e.currentTarget;
+                  t.style.display = "none";
+                  const next = t.nextElementSibling as HTMLElement | null;
+                  if (next) next.style.display = "flex";
+                }}
+              />
+            ) : null}
+            <div
+              className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg"
+              style={{ display: profile.image_url ? "none" : "flex" }}
+            >
               {initials}
             </div>
             <div>

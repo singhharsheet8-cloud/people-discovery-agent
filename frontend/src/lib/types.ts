@@ -32,6 +32,7 @@ export interface PersonProfile {
   company?: string;
   location?: string;
   bio?: string;
+  image_url?: string;
   education?: string[];
   key_facts?: string[];
   social_links?: Record<string, string>;
@@ -69,6 +70,7 @@ export interface PersonSummary {
   name: string;
   company?: string;
   current_role?: string;
+  image_url?: string;
   confidence_score: number;
   status: string;
   sources_count: number;
