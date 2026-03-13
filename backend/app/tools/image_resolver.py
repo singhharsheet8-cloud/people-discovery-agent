@@ -39,6 +39,17 @@ from app.cache import get_cached_results, set_cached_results
 from app.config import get_settings
 from app.utils import resilient_request
 
+# Lazy import to avoid circular imports — loaded only when storage is used
+_store_image_permanently = None
+
+
+def _get_store_fn():
+    global _store_image_permanently
+    if _store_image_permanently is None:
+        from app.tools.image_storage import store_image_permanently  # noqa: PLC0415
+        _store_image_permanently = store_image_permanently
+    return _store_image_permanently
+
 logger = logging.getLogger(__name__)
 _CACHE_TOOL = "image_resolver_v3"
 
@@ -102,11 +113,30 @@ async def resolve_profile_image(
             continue
 
         logger.info(f"[image] {label} → {name!r}: {url[:90]}")
-        await _cache(cache_key, url)
-        return url
+
+        # Upload to Supabase Storage for a permanent, self-hosted URL.
+        # Falls back to the original URL if storage is not configured.
+        permanent = await _upload_to_storage(url, name)
+        final_url = permanent or url
+
+        await _cache(cache_key, final_url)
+        return final_url
 
     logger.info(f"[image] no image found for {name!r}")
     return None
+
+
+async def _upload_to_storage(url: str, name: str) -> str | None:
+    """
+    Upload the image at *url* to Supabase Storage and return the permanent URL.
+    Returns None if storage is not configured or upload fails (caller uses original).
+    """
+    try:
+        store_fn = _get_store_fn()
+        return await store_fn(url, name)
+    except Exception as e:
+        logger.debug(f"[image] storage upload skipped for {name!r}: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
