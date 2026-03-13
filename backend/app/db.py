@@ -39,16 +39,16 @@ def get_engine():
             "echo": settings.log_level.upper() == "DEBUG",
         }
         if "postgresql" in database_url:
-            # Supabase requires SSL; pass via connect_args for asyncpg
-            import ssl as ssl_module
-            ssl_ctx = ssl_module.create_default_context()
+            # Supabase pooler (aws-*.pooler.supabase.com) works with ssl='require'.
+            # Using the full SSL context object causes issues with some pooler endpoints;
+            # the plain string 'require' is what asyncpg expects for pooler connections.
             engine_kwargs.update({
                 "pool_size": settings.db_pool_size,
                 "max_overflow": settings.db_pool_overflow,
                 "pool_recycle": settings.db_pool_recycle,
                 "pool_pre_ping": True,
                 "pool_timeout": 30,
-                "connect_args": {"ssl": ssl_ctx},
+                "connect_args": {"ssl": "require"},
             })
         _engine = create_async_engine(database_url, **engine_kwargs)
     return _engine
