@@ -424,47 +424,51 @@ async def _run_discovery(job_id: str, input_data: dict):
 
             await session.flush()
 
-            existing_urls: set[str] = set()
+            existing_keys: set[tuple[str, str]] = set()
             if is_merge:
                 existing_sources = (await session.execute(
-                    select(PersonSource.url).where(PersonSource.person_id == person.id)
-                )).scalars().all()
-                existing_urls = {u for u in existing_sources if u}
+                    select(PersonSource.url, PersonSource.source_type).where(PersonSource.person_id == person.id)
+                )).all()
+                existing_keys = {(row[0] or "", row[1] or "") for row in existing_sources}
 
-            new_urls: set[str] = set()
+            new_keys: set[tuple[str, str]] = set()
             for source in profile.get("sources", []):
                 url = source.get("url", "")
-                if url in existing_urls or url in new_urls:
+                stype = source.get("platform", "web")
+                key = (url, stype)
+                if key in existing_keys or key in new_keys:
                     continue
-                new_urls.add(url)
+                new_keys.add(key)
                 ps = PersonSource(
                     person_id=person.id,
-                    source_type=source.get("platform", "web"),
-                    platform=source.get("platform", "web"),
+                    source_type=stype,
+                    platform=stype,
                     url=url,
                     title=source.get("title", ""),
                     raw_content=source.get("snippet", ""),
                     relevance_score=source.get("relevance_score", source.get("confidence", 0.5)),
-                    source_reliability=source.get("confidence", _get_source_reliability(source.get("platform", "web"))),
+                    source_reliability=source.get("confidence", _get_source_reliability(stype)),
                 )
                 session.add(ps)
 
             for sr in result.get("search_results", []):
                 if isinstance(sr, dict):
                     url = sr.get("url", "")
-                    if url in existing_urls or url in new_urls:
+                    stype = sr.get("source_type", "web")
+                    key = (url, stype)
+                    if key in existing_keys or key in new_keys:
                         continue
-                    new_urls.add(url)
+                    new_keys.add(key)
                     ps = PersonSource(
                         person_id=person.id,
-                        source_type=sr.get("source_type", "web"),
-                        platform=sr.get("source_type", "web"),
+                        source_type=stype,
+                        platform=stype,
                         url=url,
                         title=sr.get("title", ""),
                         raw_content=sr.get("content", "")[:5000],
                         structured_data=json.dumps(sr.get("structured")) if sr.get("structured") else None,
                         relevance_score=sr.get("score", 0.5),
-                        source_reliability=_get_source_reliability(sr.get("source_type", "web")),
+                        source_reliability=_get_source_reliability(stype),
                     )
                     session.add(ps)
 
