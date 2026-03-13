@@ -24,12 +24,19 @@ class Settings(BaseSettings):
     admin_email: str = "admin@discovery.local"
     admin_password: str = "changeme123"
 
-    # Planning/analysis LLM — non-reasoning model, fast JSON output
+    # ── LLM Tiers ─────────────────────────────────────────────────────────
+    # Tier 1 — Planning: fastest, cheapest — query generation only
     planning_model: str = "gpt-4.1-mini"
-    planning_base_url: str = ""   # Override for Groq/Together AI
+    planning_base_url: str = ""   # e.g. https://api.groq.com/openai/v1
     planning_api_key: str = ""    # Explicit API key for the planning provider
 
-    # Synthesis LLM — reasoning model for richer profiles
+    # Tier 2 — Reasoning: smarter model for disambiguation + source scoring
+    #   Default: same as planning_model (fallback if not set)
+    reasoning_model: str = ""
+    reasoning_base_url: str = ""
+    reasoning_api_key: str = ""
+
+    # Tier 3 — Synthesis: richest prose for the final profile write-up
     synthesis_model: str = "deepseek-chat"
 
     # Alternative provider API keys (OpenAI-compatible endpoints)
@@ -113,6 +120,35 @@ def get_planning_llm(temperature: float = 0, max_tokens: int = 2048):
 
     kwargs: dict = {
         "model": settings.planning_model,
+        "api_key": api_key,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "model_kwargs": {"response_format": {"type": "json_object"}},
+    }
+    if base_url:
+        kwargs["base_url"] = base_url
+    return ChatOpenAI(**kwargs)
+
+
+def get_reasoning_llm(temperature: float = 0, max_tokens: int = 2048):
+    """Tier-2 reasoning LLM for disambiguation and source scoring.
+
+    Uses REASONING_MODEL/BASE_URL/API_KEY if set; falls back to the
+    planning LLM so existing deployments need zero config changes.
+    """
+    from langchain_openai import ChatOpenAI
+
+    settings = get_settings()
+    model    = settings.reasoning_model or settings.planning_model
+    base_url = settings.reasoning_base_url or settings.planning_base_url or None
+    api_key  = (
+        settings.reasoning_api_key
+        or settings.planning_api_key
+        or _resolve_api_key(settings, base_url)
+    )
+
+    kwargs: dict = {
+        "model": model,
         "api_key": api_key,
         "temperature": temperature,
         "max_tokens": max_tokens,
