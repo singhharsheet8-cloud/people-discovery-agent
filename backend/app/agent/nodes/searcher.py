@@ -148,8 +148,10 @@ async def execute_searches(state: AgentState) -> dict:
         elif search_type == "linkedin_profile":
             url = input_data.get("linkedin_url", "")
             if url:
+                logger.info(f"LinkedIn profile: scraping URL {url}")
                 tasks.append(_with_timeout(_run_linkedin_profile(url)))
             else:
+                logger.info(f"LinkedIn profile: searching by name '{query_str}'")
                 tasks.append(_with_timeout(_run_linkedin_name_search(query_str)))
         elif search_type == "linkedin_posts":
             tasks.append(_with_timeout(_run_linkedin_posts(query_str)))
@@ -320,11 +322,17 @@ async def _run_linkedin_profile(url: str):
 
 
 async def _run_linkedin_name_search(name: str):
-    return await search_linkedin_by_name(name)
+    logger.info(f"_run_linkedin_name_search: calling search_linkedin_by_name('{name}')")
+    results = await search_linkedin_by_name(name)
+    logger.info(f"_run_linkedin_name_search: got {len(results)} results")
+    return results
 
 
 async def _run_linkedin_posts(name: str):
-    return await scrape_linkedin_posts(name)
+    logger.info(f"_run_linkedin_posts: calling scrape_linkedin_posts('{name}')")
+    results = await scrape_linkedin_posts(name)
+    logger.info(f"_run_linkedin_posts: got {len(results)} results")
+    return results
 
 
 async def _run_twitter(handle: str):
