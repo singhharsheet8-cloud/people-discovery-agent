@@ -4,7 +4,7 @@ from app.agent.state import AgentState
 from app.tools.tavily_search import search_tavily
 from app.tools.github_search import search_github_users
 from app.tools.youtube_transcript import search_and_transcribe
-from app.tools.linkedin_scraper import scrape_linkedin_profile, scrape_linkedin_posts
+from app.tools.linkedin_scraper import scrape_linkedin_profile, scrape_linkedin_posts, search_linkedin_by_name
 from app.tools.twitter_scraper import scrape_twitter_profile
 from app.tools.reddit_scraper import search_reddit_mentions
 from app.tools.medium_scraper import search_medium_articles
@@ -109,10 +109,16 @@ def _build_gap_fill_queries(
             extra.append({"query": handle,
                           "search_type": "instagram",
                           "rationale": "gap-fill: Instagram handle provided"})
-    if "linkedin_profile" not in covered and input_data.get("linkedin_url"):
-        extra.append({"query": input_data["linkedin_url"],
-                      "search_type": "linkedin_profile",
-                      "rationale": "gap-fill: LinkedIn URL provided"})
+    if "linkedin_profile" not in covered:
+        linkedin_url = input_data.get("linkedin_url", "")
+        if linkedin_url:
+            extra.append({"query": linkedin_url,
+                          "search_type": "linkedin_profile",
+                          "rationale": "gap-fill: LinkedIn URL provided"})
+        else:
+            extra.append({"query": name,
+                          "search_type": "linkedin_profile",
+                          "rationale": "gap-fill: discover LinkedIn profile by name"})
 
     if extra:
         logger.info(
@@ -140,8 +146,11 @@ async def execute_searches(state: AgentState) -> dict:
         if search_type in ("web", "news", "academic", "crunchbase"):
             tasks.append(_with_timeout(_run_tavily(query_str, search_type)))
         elif search_type == "linkedin_profile":
-            url = input_data.get("linkedin_url", query_str)
-            tasks.append(_with_timeout(_run_linkedin_profile(url)))
+            url = input_data.get("linkedin_url", "")
+            if url:
+                tasks.append(_with_timeout(_run_linkedin_profile(url)))
+            else:
+                tasks.append(_with_timeout(_run_linkedin_name_search(query_str)))
         elif search_type == "linkedin_posts":
             tasks.append(_with_timeout(_run_linkedin_posts(query_str)))
         elif search_type == "twitter":
@@ -298,6 +307,10 @@ async def _run_tavily(query: str, search_type: str):
 
 async def _run_linkedin_profile(url: str):
     return await scrape_linkedin_profile(url)
+
+
+async def _run_linkedin_name_search(name: str):
+    return await search_linkedin_by_name(name)
 
 
 async def _run_linkedin_posts(name: str):

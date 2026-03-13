@@ -168,6 +168,57 @@ async def _apify_posts(person_name: str, max_posts: int) -> list[dict]:
         return []
 
 
+async def search_linkedin_by_name(person_name: str) -> list[dict]:
+    """Find a person's LinkedIn profile via SerpAPI Google search by name."""
+    cache_key = f"linkedin_profile_name:{person_name}"
+    cached = await get_cached_results(cache_key, "linkedin_profile")
+    if cached is not None:
+        return cached
+
+    api_key = get_settings().serpapi_api_key
+    if not api_key:
+        return []
+
+    try:
+        params = {
+            "engine": "google",
+            "q": f"site:linkedin.com/in/ \"{person_name}\"",
+            "api_key": api_key,
+            "num": 5,
+        }
+        resp = await resilient_request(
+            "get", "https://serpapi.com/search.json", params=params, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        organic = data.get("organic_results", [])
+
+        results = []
+        for item in organic:
+            url = item.get("link", "")
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            if not url or "linkedin.com/in/" not in url:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "content": snippet,
+                    "source_type": "linkedin_profile",
+                    "score": 0.85,
+                }
+            )
+
+        if results:
+            logger.info(f"SerpAPI LinkedIn name search found {len(results)} profiles for {person_name}")
+            await set_cached_results(cache_key, "linkedin_profile", results)
+        return results
+    except Exception as e:
+        logger.warning(f"SerpAPI LinkedIn name search failed for {person_name}: {e}")
+        return []
+
+
 async def _serpapi_linkedin_posts(person_name: str) -> list[dict]:
     """Fallback: search Google for LinkedIn posts/articles by this person."""
     api_key = get_settings().serpapi_api_key
