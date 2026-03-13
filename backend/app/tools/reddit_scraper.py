@@ -1,4 +1,4 @@
-"""Reddit mention search — SerpAPI primary, Apify fallback."""
+"""Reddit mention search — Reddit JSON API primary, SerpAPI fallback, Apify last."""
 
 import logging
 
@@ -9,18 +9,22 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 APIFY_BASE = "https://api.apify.com/v2"
+REDDIT_SEARCH_URL = "https://www.reddit.com/search.json"
+USER_AGENT = "PeopleDiscoveryAgent/1.0 (research bot)"
 
 
 async def search_reddit_mentions(
     person_name: str, max_results: int = 10
 ) -> list[dict]:
-    """Search Reddit for mentions — SerpAPI first, Apify fallback."""
+    """Search Reddit for mentions — Reddit API first, SerpAPI second, Apify last."""
     cache_key = f"reddit:{person_name}"
     cached = await get_cached_results(cache_key, "reddit")
     if cached is not None:
         return cached
 
-    results = await _serpapi_reddit(person_name, max_results)
+    results = await _reddit_json_api(person_name, max_results)
+    if not results:
+        results = await _serpapi_reddit(person_name, max_results)
     if not results:
         results = await _apify_reddit(person_name, max_results)
 
@@ -29,8 +33,64 @@ async def search_reddit_mentions(
     return results
 
 
+async def _reddit_json_api(person_name: str, max_results: int) -> list[dict]:
+    """Search Reddit via its free public JSON API (no auth needed)."""
+    try:
+        params = {
+            "q": f'"{person_name}"',
+            "sort": "relevance",
+            "limit": min(max_results, 25),
+            "type": "link",
+            "t": "all",
+        }
+        resp = await resilient_request(
+            "get",
+            REDDIT_SEARCH_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        children = data.get("data", {}).get("children", [])
+
+        results = []
+        for child in children:
+            post = child.get("data", {})
+            title = post.get("title", "")
+            selftext = post.get("selftext", "")[:2000]
+            permalink = post.get("permalink", "")
+            url = f"https://reddit.com{permalink}" if permalink else post.get("url", "")
+            subreddit = post.get("subreddit", "")
+
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "content": selftext or title,
+                    "source_type": "reddit",
+                    "score": 0.85,
+                    "structured": {
+                        "subreddit": subreddit,
+                        "author": post.get("author", ""),
+                        "score": post.get("score", 0),
+                        "num_comments": post.get("num_comments", 0),
+                        "created": post.get("created_utc", ""),
+                        "upvote_ratio": post.get("upvote_ratio", 0),
+                    },
+                }
+            )
+
+        if results:
+            logger.info(f"Reddit JSON API found {len(results)} results for {person_name}")
+        return results
+    except Exception as e:
+        logger.warning(f"Reddit JSON API failed for {person_name}: {e}")
+        return []
+
+
 async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
-    """Search Google for Reddit threads mentioning this person."""
+    """Fallback: search Google for Reddit threads mentioning this person."""
     api_key = get_settings().serpapi_api_key
     if not api_key:
         return []
@@ -67,9 +127,7 @@ async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
                     "content": snippet,
                     "source_type": "reddit",
                     "score": 0.8,
-                    "structured": {
-                        "subreddit": subreddit,
-                    },
+                    "structured": {"subreddit": subreddit},
                 }
             )
 
@@ -82,7 +140,7 @@ async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
 
 
 async def _apify_reddit(person_name: str, max_results: int) -> list[dict]:
-    """Fallback: Apify Reddit Intelligence Scraper."""
+    """Last resort: Apify Reddit Intelligence Scraper."""
     api_key = get_settings().apify_api_key
     if not api_key:
         return []
