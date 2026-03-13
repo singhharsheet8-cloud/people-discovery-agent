@@ -125,6 +125,7 @@ class PersonUpdate(BaseModel):
     company: str | None = Field(None, max_length=500)
     location: str | None = Field(None, max_length=255)
     bio: str | None = Field(None, max_length=10000)
+    image_url: str | None = None
 
 
 class JobDetail(BaseModel):
@@ -494,7 +495,7 @@ async def _run_discovery(job_id: str, input_data: dict):
             action = "merged into" if is_merge else "created"
             logger.info(
                 f"Discovery complete for job {job_id}: {action} {person.name} "
-                f"(v{person.version}, {len(new_urls)} new sources, {elapsed_ms:.0f}ms)"
+                f"(v{person.version}, {len(new_keys)} new sources, {elapsed_ms:.0f}ms)"
             )
 
         from app.api.webhooks import fire_webhooks
