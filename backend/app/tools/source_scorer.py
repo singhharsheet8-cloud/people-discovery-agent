@@ -21,7 +21,10 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.utils import invoke_reasoning_llm
+# Benchmarks (Mar 2026) showed llama-3.1-8b-instant correctly detects irrelevant
+# sources (namesakes, unrelated people) while llama-4-scout fails this task.
+# Scorer uses the planning LLM (fast + accurate) not the reasoning LLM.
+from app.utils import invoke_llm_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +110,7 @@ async def score_sources(
         return _heuristic_scores(results)
 
     try:
-        response, usage = await invoke_reasoning_llm(
+        response, usage = await invoke_llm_with_fallback(
             [
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=_build_user_prompt(target, results)),

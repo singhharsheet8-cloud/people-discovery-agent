@@ -15,15 +15,19 @@ MODEL_PRICING = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
     # DeepSeek
     "deepseek-chat": {"input": 0.14, "output": 0.28},
-    # Groq (per million tokens, USD)
+    # Groq — Llama 3
     "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
     "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
     "llama3-8b-8192": {"input": 0.05, "output": 0.08},
     "llama3-70b-8192": {"input": 0.59, "output": 0.79},
     # Groq — Llama 4
     "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34},
+    # Groq — OpenAI OSS models (production, March 2026)
+    "openai/gpt-oss-20b": {"input": 0.075, "output": 0.30},   # 1000 TPS
+    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60},   # 500 TPS
     # Groq — Kimi K2
     "moonshotai/kimi-k2-instruct": {"input": 1.00, "output": 1.00},
+    "moonshotai/kimi-k2-instruct-0905": {"input": 1.00, "output": 3.00},
     # Groq — Compound
     "groq/compound-mini": {"input": 0.10, "output": 0.30},
     "groq/compound": {"input": 0.50, "output": 1.00},

@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # Tier 3 — Synthesis: richest prose for the final profile write-up
     synthesis_model: str = "deepseek-chat"
+    synthesis_base_url: str = ""  # e.g. https://api.groq.com/openai/v1 for Groq OSS models
+    synthesis_api_key: str = ""   # Explicit key for the synthesis provider
 
     # Alternative provider API keys (OpenAI-compatible endpoints)
     groq_api_key: str = ""  # Optional: Groq for ultra-fast inference
@@ -181,14 +183,37 @@ def _is_reasoning_model(model: str) -> bool:
 
 
 def get_synthesis_llm():
-    """Build synthesis LLM — DeepSeek, Anthropic Claude, or OpenAI GPT."""
+    """Build synthesis LLM — supports Groq/custom endpoint, DeepSeek, Anthropic, or OpenAI.
+
+    Priority:
+      1. SYNTHESIS_BASE_URL set  → treat as OpenAI-compatible endpoint (Groq OSS, Together, etc.)
+      2. DeepSeek prefix         → DeepSeek API
+      3. Claude prefix           → Anthropic API
+      4. Fallback                → OpenAI
+    """
     from langchain_anthropic import ChatAnthropic
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
     model = settings.synthesis_model
 
-    # DeepSeek: OpenAI-compatible API
+    # ── Priority 1: Custom OpenAI-compatible endpoint (e.g. Groq gpt-oss-20b) ──
+    if settings.synthesis_base_url:
+        api_key = (
+            settings.synthesis_api_key
+            or settings.groq_api_key
+            or settings.openai_api_key
+        )
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=settings.synthesis_base_url,
+            temperature=0,
+            max_tokens=4096,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+    # ── Priority 2: DeepSeek ──────────────────────────────────────────────────
     if model.startswith("deepseek") and settings.deepseek_api_key:
         return ChatOpenAI(
             model=model,
@@ -199,7 +224,7 @@ def get_synthesis_llm():
             model_kwargs={"response_format": {"type": "json_object"}},
         )
 
-    # Anthropic Claude
+    # ── Priority 3: Anthropic Claude ─────────────────────────────────────────
     if model.startswith("claude") and settings.anthropic_api_key:
         return ChatAnthropic(
             model=model,
@@ -208,7 +233,7 @@ def get_synthesis_llm():
             max_tokens=4096,
         )
 
-    # OpenAI GPT fallback
+    # ── Priority 4: OpenAI (default) ─────────────────────────────────────────
     kwargs: dict = {
         "model": model,
         "api_key": settings.openai_api_key,
