@@ -20,6 +20,15 @@ MODEL_PRICING = {
     "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
     "llama3-8b-8192": {"input": 0.05, "output": 0.08},
     "llama3-70b-8192": {"input": 0.59, "output": 0.79},
+    # Groq — Llama 4
+    "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34},
+    # Groq — Kimi K2
+    "moonshotai/kimi-k2-instruct": {"input": 1.00, "output": 1.00},
+    # Groq — Compound
+    "groq/compound-mini": {"input": 0.10, "output": 0.30},
+    "groq/compound": {"input": 0.50, "output": 1.00},
+    # Groq — Qwen 3
+    "qwen/qwen3-32b": {"input": 0.29, "output": 0.59},
 }
 
 
@@ -121,6 +130,36 @@ async def resilient_request(
             else:
                 raise
     raise last_error  # type: ignore[misc]
+
+
+async def invoke_reasoning_llm(messages, label: str = "reasoning", max_tokens: int = 2048) -> tuple:
+    """Invoke Tier-2 reasoning LLM (Llama4-Scout / similar) with OpenAI fallback."""
+    from app.config import get_reasoning_llm, get_fallback_planning_llm, get_settings
+
+    settings = get_settings()
+    model_name = settings.reasoning_model or settings.planning_model
+    primary = get_reasoning_llm(max_tokens=max_tokens)
+
+    try:
+        response = await primary.ainvoke(messages)
+    except Exception as primary_err:
+        err_str = str(primary_err).lower()
+        if not any(t in err_str for t in ("rate limit", "rate_limit", "429")):
+            raise
+
+        fallback = get_fallback_planning_llm(max_tokens=max_tokens)
+        if fallback is None:
+            raise
+
+        logger.warning(f"{label}: reasoning LLM rate-limited, falling back to OpenAI")
+        response = await fallback.ainvoke(messages)
+        model_name = "gpt-4.1-mini"
+
+    usage = extract_usage(response)
+    usage["model"] = model_name
+    usage["cost"] = estimate_cost(model_name, usage["input_tokens"], usage["output_tokens"])
+    usage["label"] = label
+    return response, usage
 
 
 async def invoke_llm_with_fallback(messages, label: str = "llm", max_tokens: int = 2048) -> tuple:

@@ -2,7 +2,7 @@ import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.agent.state import AgentState
-from app.utils import invoke_llm_with_fallback
+from app.utils import invoke_reasoning_llm
 from app.tools.source_scorer import score_sources
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ Search results ({len(results_summary)} total, pre-scored for source quality):
 Analyze these results and identify the person(s) they refer to.
 Prefer higher-confidence sources when resolving conflicts."""
 
-    response, usage = await invoke_llm_with_fallback([
+    response, usage = await invoke_reasoning_llm([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ], label="analyzer", max_tokens=4096)

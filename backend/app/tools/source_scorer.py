@@ -21,7 +21,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.utils import invoke_llm_with_fallback
+from app.utils import invoke_reasoning_llm
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ async def score_sources(
         return _heuristic_scores(results)
 
     try:
-        response, usage = await invoke_llm_with_fallback(
+        response, usage = await invoke_reasoning_llm(
             [
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=_build_user_prompt(target, results)),
