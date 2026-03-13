@@ -206,17 +206,19 @@ async def execute_searches(state: AgentState) -> dict:
             logger.warning(f"Firecrawl batch extract failed: {e}")
 
     # Auto-discover and scrape Twitter/Instagram handles from gathered results
-    covered_types = {q.get("search_type", "web") if isinstance(q, dict) else "web" for q in queries}
-    has_twitter = "twitter" in covered_types or bool(input_data.get("twitter_handle"))
-    has_instagram = "instagram" in covered_types or bool(input_data.get("instagram_handle"))
+    got_twitter = any(
+        r.get("source_type") == "twitter" or "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
+        for r in all_results
+    )
+    got_instagram = any(r.get("source_type") == "instagram" for r in all_results)
 
-    if not has_twitter or not has_instagram:
+    if not got_twitter or not got_instagram:
         discovered = _extract_social_handles(all_results, seen_urls)
         social_tasks = []
-        if not has_twitter and discovered.get("twitter"):
+        if not got_twitter and discovered.get("twitter"):
             logger.info(f"Auto-discovered Twitter handle: @{discovered['twitter']}")
             social_tasks.append(("twitter", _with_timeout(_run_twitter(discovered["twitter"]))))
-        if not has_instagram and discovered.get("instagram"):
+        if not got_instagram and discovered.get("instagram"):
             logger.info(f"Auto-discovered Instagram handle: @{discovered['instagram']}")
             social_tasks.append(("instagram", _with_timeout(_run_instagram(discovered["instagram"]))))
 
