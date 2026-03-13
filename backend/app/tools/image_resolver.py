@@ -1,23 +1,27 @@
 """
-Profile image resolution via a prioritised waterfall.
+Profile image resolution — 5-tier waterfall, LinkedIn-first for non-famous people.
 
-Priority (cheapest / most accurate first):
-  1. Already-fetched structured data (GitHub avatar, LinkedIn imgUrl, Instagram profile_pic)
-  2. Wikipedia REST API          — free, no key, best for public figures
-  3. DuckDuckGo Instant Answer   — free, no key, broad coverage
-  4. SerpAPI Knowledge Graph     — existing paid key, Google knowledge panel image
+Priority:
+  1. Structured data already in memory  — LinkedIn profilePicUrl, GitHub avatar_url,
+                                          Instagram profile_pic (ZERO extra API calls)
+  2. SerpAPI → LinkedIn thumbnail        — Google caches LinkedIn photos; works for ANY
+                                          person with a LinkedIn profile, not just famous
+  3. Firecrawl → LinkedIn og:image       — direct og:image scrape from the LinkedIn URL
+                                          (uses existing Firecrawl key)
+  4. Wikipedia REST API                  — free, no key, good for public figures
+  5. SerpAPI Knowledge Graph             — Google knowledge panel image for well-known people
 """
 
 import logging
 import urllib.parse
+import re
 
 from app.cache import get_cached_results, set_cached_results
 from app.utils import resilient_request
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-_CACHE_TOOL = "image_resolver"
+_CACHE_TOOL = "image_resolver_v2"
 
 
 async def resolve_profile_image(
@@ -27,74 +31,104 @@ async def resolve_profile_image(
 ) -> str | None:
     """
     Return a public image URL for the person, or None if nothing found.
-
-    Tries structured sources already in memory first (zero API calls),
-    then free external APIs, then the paid SerpAPI fallback.
+    Call order is optimised for cost and coverage: free/in-memory first,
+    then paid API calls, each one only if the previous tiers all failed.
     """
+    if not name:
+        return None
+
     cache_key = f"{name}|{company or ''}"
     cached = await get_cached_results(cache_key, _CACHE_TOOL)
     if cached:
         url = cached[0].get("image_url") if cached else None
-        logger.info(f"[image_resolver] cache hit for {name!r}: {url}")
+        logger.info(f"[image] cache hit for {name!r}: {url}")
         return url
 
-    # --- Tier 1: extract from already-fetched structured data ---
-    url = _extract_from_sources(search_results or [])
+    results = search_results or []
+
+    # ------------------------------------------------------------------
+    # Tier 1 — extract from already-fetched structured source data
+    # ------------------------------------------------------------------
+    url = _extract_from_sources(results)
     if url:
-        logger.info(f"[image_resolver] found in structured sources for {name!r}: {url}")
+        logger.info(f"[image] Tier-1 structured: {name!r} → {url[:80]}")
         await _cache(cache_key, url)
         return url
 
-    # --- Tier 2: Wikipedia REST API (free) ---
+    # Collect any LinkedIn URL we already know about (used in Tier 3)
+    linkedin_url = _find_linkedin_url(results)
+
+    # ------------------------------------------------------------------
+    # Tier 2 — SerpAPI: Google caches LinkedIn profile photos as thumbnails
+    #          Works for ANY LinkedIn user, not just famous people.
+    # ------------------------------------------------------------------
+    url = await _serpapi_linkedin_thumbnail(name, company)
+    if url:
+        logger.info(f"[image] Tier-2 SerpAPI-LinkedIn: {name!r} → {url[:80]}")
+        await _cache(cache_key, url)
+        return url
+
+    # ------------------------------------------------------------------
+    # Tier 3 — Firecrawl: scrape og:image from the person's LinkedIn page
+    # ------------------------------------------------------------------
+    if linkedin_url:
+        url = await _firecrawl_linkedin_og_image(linkedin_url)
+        if url:
+            logger.info(f"[image] Tier-3 Firecrawl-og: {name!r} → {url[:80]}")
+            await _cache(cache_key, url)
+            return url
+
+    # ------------------------------------------------------------------
+    # Tier 4 — Wikipedia REST API (free, great for public figures)
+    # ------------------------------------------------------------------
     url = await _wikipedia_image(name)
     if url:
-        logger.info(f"[image_resolver] Wikipedia image for {name!r}: {url}")
+        logger.info(f"[image] Tier-4 Wikipedia: {name!r} → {url[:80]}")
         await _cache(cache_key, url)
         return url
 
-    # --- Tier 3: DuckDuckGo Instant Answer (free) ---
-    url = await _duckduckgo_image(name)
+    # ------------------------------------------------------------------
+    # Tier 5 — SerpAPI Knowledge Graph (Google panel image)
+    # ------------------------------------------------------------------
+    url = await _serpapi_knowledge_graph(name, company)
     if url:
-        logger.info(f"[image_resolver] DuckDuckGo image for {name!r}: {url}")
+        logger.info(f"[image] Tier-5 SerpAPI-KG: {name!r} → {url[:80]}")
         await _cache(cache_key, url)
         return url
 
-    # --- Tier 4: SerpAPI Knowledge Graph (existing paid key) ---
-    url = await _serpapi_knowledge_graph_image(name, company)
-    if url:
-        logger.info(f"[image_resolver] SerpAPI KG image for {name!r}: {url}")
-        await _cache(cache_key, url)
-        return url
-
-    logger.info(f"[image_resolver] no image found for {name!r}")
+    logger.info(f"[image] no image found for {name!r}")
     return None
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — extract from structured source data already in memory
+# Tier 1 — extract from structured data already in memory
 # ---------------------------------------------------------------------------
 
 def _extract_from_sources(results: list[dict]) -> str | None:
     """
-    Scan existing search results for profile images already fetched.
-    Checks GitHub avatar_url, LinkedIn imgUrl/profilePicUrl, Instagram profile_pic.
+    Scan already-fetched search results for profile images.
+    Checks LinkedIn (highest priority), GitHub, Instagram.
     """
-    # Priority order: LinkedIn > GitHub > Instagram (LinkedIn has highest-res headshots)
     candidates: list[tuple[int, str]] = []
 
     for r in results:
         structured = r.get("structured", {})
         if not isinstance(structured, dict):
             continue
-
         source_type = r.get("source_type", "")
 
         if source_type == "linkedin_profile":
-            for key in ("imgUrl", "profilePicUrl", "profilePictureUrl",
-                        "profileImage", "photoUrl", "picture"):
+            # Apify dataweave~linkedin-profile-scraper uses 'profilePicUrl'
+            # Other actors may use different keys — check all common variants
+            for key in (
+                "profilePicUrl", "profilePicUrlEncoded", "imgUrl",
+                "photoUrl", "profileImage", "profileImageUrl",
+                "pictureUrl", "picture", "avatarUrl",
+            ):
                 val = structured.get(key)
                 if val and isinstance(val, str) and val.startswith("http"):
-                    candidates.append((0, val))  # highest priority
+                    candidates.append((0, val))
+                    break
 
         elif source_type == "github":
             val = structured.get("avatar_url")
@@ -112,121 +146,169 @@ def _extract_from_sources(results: list[dict]) -> str | None:
     return None
 
 
+def _find_linkedin_url(results: list[dict]) -> str | None:
+    """Return the first LinkedIn profile URL found in search results."""
+    for r in results:
+        url = r.get("url", "")
+        if "linkedin.com/in/" in url:
+            return url
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Tier 2 — Wikipedia REST API
+# Tier 2 — SerpAPI: Google-cached LinkedIn profile thumbnail
+#
+# When Google indexes a LinkedIn profile it stores the profile photo.
+# SerpAPI exposes this as `organic_results[].thumbnail`.
+# This works for non-famous people who have a LinkedIn profile.
+# ---------------------------------------------------------------------------
+
+async def _serpapi_linkedin_thumbnail(
+    name: str,
+    company: str | None,
+) -> str | None:
+    api_key = get_settings().serpapi_api_key
+    if not api_key:
+        return None
+
+    # Build a targeted query: forces LinkedIn results with company context
+    query_parts = [f'"{name}"']
+    if company:
+        query_parts.append(f'"{company}"')
+    query_parts.append("site:linkedin.com/in")
+    query = " ".join(query_parts)
+
+    try:
+        resp = await resilient_request(
+            "get",
+            "https://serpapi.com/search.json",
+            params={"engine": "google", "q": query, "api_key": api_key, "num": 5},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+
+        # Check organic results for LinkedIn thumbnails
+        for result in data.get("organic_results", []):
+            link = result.get("link", "")
+            thumbnail = result.get("thumbnail", "")
+            if "linkedin.com/in" in link and thumbnail and thumbnail.startswith("http"):
+                return thumbnail
+
+        # Also check people_also_search_for thumbnails
+        for item in data.get("related_searches", []):
+            thumbnail = item.get("thumbnail", "")
+            if thumbnail and thumbnail.startswith("http"):
+                return thumbnail
+
+    except Exception as e:
+        logger.debug(f"[image] SerpAPI LinkedIn failed for {name!r}: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 3 — Firecrawl: scrape og:image from the LinkedIn profile page
+# ---------------------------------------------------------------------------
+
+async def _firecrawl_linkedin_og_image(linkedin_url: str) -> str | None:
+    api_key = get_settings().firecrawl_api_key
+    if not api_key:
+        return None
+
+    try:
+        resp = await resilient_request(
+            "post",
+            "https://api.firecrawl.dev/v1/scrape",
+            json={
+                "url": linkedin_url,
+                "formats": ["extract"],
+                "extract": {"schema": {"image_url": "string"}},
+                "onlyMainContent": False,
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            # Try extract first
+            extracted = data.get("data", {}).get("extract", {})
+            img = extracted.get("image_url", "")
+            if img and img.startswith("http"):
+                return img
+
+            # Fall back to metadata og:image
+            metadata = data.get("data", {}).get("metadata", {})
+            img = metadata.get("ogImage") or metadata.get("og:image", "")
+            if img and img.startswith("http"):
+                return img
+
+    except Exception as e:
+        logger.debug(f"[image] Firecrawl og:image failed for {linkedin_url}: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 4 — Wikipedia REST API (free, no key needed)
 # ---------------------------------------------------------------------------
 
 async def _wikipedia_image(name: str) -> str | None:
-    """
-    Hit Wikipedia's REST summary endpoint.
-    Returns thumbnail.source for the person's Wikipedia page if it exists.
-    Works for ~90% of the public figures this tool is designed to discover.
-    """
     encoded = urllib.parse.quote(name.replace(" ", "_"))
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
     try:
         resp = await resilient_request(
             "get", url,
-            headers={"User-Agent": "PeopleDiscoveryAgent/2.0 (harsheet@example.com)"},
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            thumbnail = data.get("thumbnail", {})
-            img = thumbnail.get("source")
-            # Prefer higher-res: bump width to 400
-            if img:
-                img = _upscale_wikipedia_thumb(img, 400)
-            return img
-    except Exception as e:
-        logger.debug(f"[image_resolver] Wikipedia failed for {name!r}: {e}")
-    return None
-
-
-def _upscale_wikipedia_thumb(url: str, target_width: int) -> str:
-    """Replace /NNpx- with /400px- in a Wikimedia thumbnail URL."""
-    import re
-    return re.sub(r"/(\d+)px-", f"/{target_width}px-", url)
-
-
-# ---------------------------------------------------------------------------
-# Tier 3 — DuckDuckGo Instant Answer API (free, no key)
-# ---------------------------------------------------------------------------
-
-async def _duckduckgo_image(name: str) -> str | None:
-    """
-    DuckDuckGo's Instant Answer API returns an `Image` field for known entities.
-    Free, no API key, good coverage for executives and researchers.
-    """
-    try:
-        params = {
-            "q": name,
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1",
-        }
-        resp = await resilient_request(
-            "get", "https://api.duckduckgo.com/",
-            params=params,
             headers={"User-Agent": "PeopleDiscoveryAgent/2.0"},
             timeout=8,
         )
         if resp.status_code == 200:
             data = resp.json()
-            img = data.get("Image", "")
-            if img and img.startswith("http"):
-                return img
-            # Sometimes image is relative
-            if img and img.startswith("/"):
-                return f"https://duckduckgo.com{img}"
+            thumbnail = data.get("thumbnail", {})
+            img = thumbnail.get("source", "")
+            if img:
+                img = re.sub(r"/(\d+)px-", "/400px-", img)
+            return img or None
     except Exception as e:
-        logger.debug(f"[image_resolver] DuckDuckGo failed for {name!r}: {e}")
+        logger.debug(f"[image] Wikipedia failed for {name!r}: {e}")
     return None
 
 
 # ---------------------------------------------------------------------------
-# Tier 4 — SerpAPI Google Knowledge Graph (existing paid key)
+# Tier 5 — SerpAPI Google Knowledge Graph
 # ---------------------------------------------------------------------------
 
-async def _serpapi_knowledge_graph_image(
-    name: str,
-    company: str | None = None,
+async def _serpapi_knowledge_graph(
+    name: str, company: str | None
 ) -> str | None:
-    """
-    Query SerpAPI with the person's name. Google's knowledge graph
-    for public figures includes a `knowledge_graph.image` field.
-    Uses the existing SERPAPI_API_KEY — no extra cost beyond current usage.
-    """
     api_key = get_settings().serpapi_api_key
     if not api_key:
         return None
 
-    query = name if not company else f"{name} {company}"
+    query = f"{name} {company}" if company else name
     try:
-        params = {
-            "engine": "google",
-            "q": query,
-            "api_key": api_key,
-            "num": 1,
-        }
         resp = await resilient_request(
-            "get", "https://serpapi.com/search.json",
-            params=params,
+            "get",
+            "https://serpapi.com/search.json",
+            params={"engine": "google", "q": query, "api_key": api_key, "num": 1},
             timeout=15,
         )
         if resp.status_code == 200:
             data = resp.json()
             kg = data.get("knowledge_graph", {})
-            img = kg.get("image") or kg.get("header_images", [{}])[0].get("image")
+            img = kg.get("image") or kg.get("thumbnail", "")
+            header_imgs = kg.get("header_images", [])
+            if not img and header_imgs:
+                img = header_imgs[0].get("image", "")
             if img and isinstance(img, str) and img.startswith("http"):
                 return img
     except Exception as e:
-        logger.debug(f"[image_resolver] SerpAPI KG failed for {name!r}: {e}")
+        logger.debug(f"[image] SerpAPI KG failed for {name!r}: {e}")
     return None
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Cache helper
 # ---------------------------------------------------------------------------
 
 async def _cache(cache_key: str, image_url: str) -> None:
