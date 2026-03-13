@@ -1600,36 +1600,3 @@ def _person_to_dict(person: Person) -> dict:
     }
 
 
-@router.get("/debug/linkedin-test")
-async def debug_linkedin_test(name: str = Query("Sundar Pichai")):
-    """Diagnostic: test LinkedIn search directly."""
-    from app.tools.linkedin_scraper import search_linkedin_by_name, scrape_linkedin_posts
-
-    results_profile = []
-    results_posts = []
-    errors = []
-
-    try:
-        results_profile = await search_linkedin_by_name(name)
-    except Exception as e:
-        errors.append(f"search_linkedin_by_name: {e}")
-
-    try:
-        results_posts = await scrape_linkedin_posts(name)
-    except Exception as e:
-        errors.append(f"scrape_linkedin_posts: {e}")
-
-    return {
-        "name": name,
-        "linkedin_profile_results": len(results_profile),
-        "linkedin_profile_sample": [
-            {"title": r.get("title"), "url": r.get("url"), "source_type": r.get("source_type")}
-            for r in results_profile[:3]
-        ],
-        "linkedin_posts_results": len(results_posts),
-        "linkedin_posts_sample": [
-            {"title": r.get("title"), "url": r.get("url"), "source_type": r.get("source_type")}
-            for r in results_posts[:3]
-        ],
-        "errors": errors,
-    }
