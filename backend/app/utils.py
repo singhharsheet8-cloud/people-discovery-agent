@@ -67,7 +67,11 @@ def async_retry(max_retries: int = 2, base_delay: float = 1.0, max_delay: float 
                     last_error = e
                     error_str = str(e).lower()
 
-                    non_retryable = ("auth", "invalid", "not found", "permission", "api key", "rate limit", "rate_limit", "429")
+                    # Note: rate-limit/429 errors ARE retried here (with backoff) because
+                    # the synthesis fallback chain in synthesizer.py needs to see them.
+                    # The invoker-level fallbacks handle 429s by switching models; the
+                    # retry decorator handles transient 5xx and network errors.
+                    non_retryable = ("auth", "invalid", "not found", "permission", "api key")
                     if any(term in error_str for term in non_retryable):
                         raise
 

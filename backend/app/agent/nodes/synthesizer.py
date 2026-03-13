@@ -3,13 +3,18 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.config import get_synthesis_llm, get_reasoning_llm, get_planning_llm, get_settings
 from app.agent.state import AgentState
-from app.utils import async_retry, extract_usage, estimate_cost
+from app.utils import extract_usage, estimate_cost
 
 logger = logging.getLogger(__name__)
 
 
-@async_retry(max_retries=2)
 async def _invoke_synthesizer(llm, messages):
+    """Single synthesis invocation — no retry.
+    
+    Retry / fallback logic is handled by _invoke_with_fallback which switches
+    to higher-context models on overflow/rate-limit errors. Retrying the same
+    model on 429s only adds latency before the fallback kicks in.
+    """
     return await llm.ainvoke(messages)
 
 
