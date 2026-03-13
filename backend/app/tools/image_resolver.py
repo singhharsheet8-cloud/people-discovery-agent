@@ -234,7 +234,13 @@ async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
 async def _serpapi_gimg_query(query: str, api_key: str) -> str | None:
     """
     Run a Google Images SerpAPI query and return the first confirmed
-    LinkedIn CDN profile photo URL.
+    direct (non-SerpAPI-cached) image URL.
+
+    Priority within results:
+      1. LinkedIn CDN profile photos (media.licdn.com/dms/image/*/profile-displayphoto)
+      2. Any other direct permanent URL (not serpapi.com, not a redirect)
+    SerpAPI-hosted thumbnails (serpapi.com/searches/...) are skipped —
+    they are ephemeral cache entries that expire within days.
     """
     try:
         resp = await resilient_request(
@@ -252,14 +258,28 @@ async def _serpapi_gimg_query(query: str, api_key: str) -> str | None:
         if resp.status_code != 200:
             return None
 
+        linkedin_hit = None
+        fallback_hit = None
+
         for img in resp.json().get("images_results", []):
             original = img.get("original", "")
-            # Only accept LinkedIn CDN profile display photos
+            if not original.startswith("http"):
+                continue
+            # Skip SerpAPI-cached images — they expire
+            if "serpapi.com" in original:
+                continue
+
             if (
                 original.startswith(_LICDN_PREFIX)
                 and "profile-displayphoto" in original
             ):
-                return original
+                linkedin_hit = original
+                break  # best possible result
+
+            if fallback_hit is None:
+                fallback_hit = original
+
+        return linkedin_hit or fallback_hit
 
     except Exception as e:
         logger.debug(f"[image] SerpAPI Google Images failed ({query[:60]}): {e}")
@@ -352,7 +372,13 @@ async def _serpapi_organic_thumbnail(
             for result in resp.json().get("organic_results", []):
                 thumbnail = result.get("thumbnail", "")
                 link = result.get("link", "")
-                if "linkedin.com/in" in link and thumbnail and thumbnail.startswith("http"):
+                # Skip SerpAPI-cached thumbnails — they expire
+                if (
+                    "linkedin.com/in" in link
+                    and thumbnail
+                    and thumbnail.startswith("http")
+                    and "serpapi.com" not in thumbnail
+                ):
                     return thumbnail
     except Exception as e:
         logger.debug(f"[image] SerpAPI organic failed for {name!r}: {e}")
