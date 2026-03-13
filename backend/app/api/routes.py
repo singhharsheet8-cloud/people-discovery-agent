@@ -498,6 +498,23 @@ async def _run_discovery(job_id: str, input_data: dict):
                 f"(v{person.version}, {len(new_keys)} new sources, {elapsed_ms:.0f}ms)"
             )
 
+        # Post-save image fill — if the agent didn't find an image, run the
+        # resolver now with the fully known LinkedIn handle so Tier 2/3
+        # (SerpAPI Google Images) can fill it in.
+        if not person.image_url:
+            person_id_for_img = person.id
+            person_name_for_img = person.name
+            person_company_for_img = person.company
+            search_results_for_img = result.get("search_results", [])
+            asyncio.create_task(
+                _fill_image_post_save(
+                    person_id_for_img,
+                    person_name_for_img,
+                    person_company_for_img,
+                    search_results_for_img,
+                )
+            )
+
         from app.api.webhooks import fire_webhooks
         event = "person.updated" if is_merge else "job.completed"
         await fire_webhooks(event, {
@@ -524,6 +541,37 @@ async def _run_discovery(job_id: str, input_data: dict):
                 job.latency_ms = (time.time() - start_time) * 1000
                 job.completed_at = datetime.now(timezone.utc)
             await session.commit()
+
+
+async def _fill_image_post_save(
+    person_id: str,
+    name: str,
+    company: str | None,
+    search_results: list[dict],
+) -> None:
+    """
+    Background task: resolve the profile image after the person is already
+    saved, then write it back to the DB.  Called only when the main agent
+    run produced no image_url.
+    """
+    try:
+        from app.tools.image_resolver import resolve_profile_image
+        image_url = await resolve_profile_image(
+            name=name, company=company, search_results=search_results
+        )
+        if not image_url:
+            return
+        factory = get_session_factory()
+        async with factory() as session:
+            person = (await session.execute(
+                select(Person).where(Person.id == person_id)
+            )).scalar_one_or_none()
+            if person and not person.image_url:
+                person.image_url = image_url
+                await session.commit()
+                logger.info(f"[image] post-save fill: {name!r} → {image_url[:80]}")
+    except Exception as e:
+        logger.warning(f"[image] post-save fill failed for {name!r}: {e}")
 
 
 def _get_source_reliability(platform: str) -> float:
