@@ -1600,3 +1600,177 @@ def _person_to_dict(person: Person) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# All available field names a caller can request in /fields
+# ---------------------------------------------------------------------------
+_SCALAR_FIELDS = {
+    "name", "current_role", "company", "location", "bio", "image_url",
+    "confidence_score", "reputation_score", "status", "version",
+    "created_at", "updated_at",
+}
+_JSON_FIELDS = {
+    "education", "key_facts", "social_links", "expertise",
+    "notable_work", "career_timeline",
+}
+_ALL_FIELDS = _SCALAR_FIELDS | _JSON_FIELDS
+
+
+def _pick_fields(person: Person, fields: list[str]) -> dict:
+    """Return only the requested fields from a Person ORM object."""
+    out: dict = {"id": person.id}
+    for f in fields:
+        if f in _SCALAR_FIELDS:
+            val = getattr(person, f, None)
+            out[f] = val.isoformat() if hasattr(val, "isoformat") else val
+        elif f in _JSON_FIELDS:
+            out[f] = person.get_json(f)
+    return out
+
+
+def _source_to_dict(src: PersonSource) -> dict:
+    return {
+        "platform": src.platform,
+        "source_type": src.source_type,
+        "url": src.url,
+        "title": src.title,
+        "relevance_score": round(src.relevance_score, 3),
+        "source_reliability": round(src.source_reliability, 3),
+        "fetched_at": src.fetched_at.isoformat() if src.fetched_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /persons/{person_id}/fields?fields=name,company,image_url,...
+# ---------------------------------------------------------------------------
+@router.get("/persons/{person_id}/fields")
+async def get_person_fields(
+    person_id: str,
+    fields: str = "name,current_role,company,image_url",
+    _auth=Depends(require_viewer),
+):
+    """
+    Return specific fields for a person, each annotated with the sources
+    that contributed to that field's value.
+
+    **fields** — comma-separated list of field names to return.
+    Available fields:
+      name, current_role, company, location, bio, image_url,
+      education, key_facts, social_links, expertise, notable_work,
+      career_timeline, confidence_score, reputation_score,
+      status, version, created_at, updated_at
+
+    Example:
+      GET /api/persons/{id}/fields?fields=name,company,current_role,image_url,social_links
+    """
+    requested = [f.strip() for f in fields.split(",") if f.strip()]
+    unknown = [f for f in requested if f not in _ALL_FIELDS]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown fields: {unknown}. Available: {sorted(_ALL_FIELDS)}",
+        )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_result = await session.execute(
+            select(PersonSource)
+            .where(PersonSource.person_id == person_id)
+            .order_by(PersonSource.relevance_score.desc())
+        )
+        all_sources = sources_result.scalars().all()
+
+    field_data = _pick_fields(person, requested)
+
+    # Build a source list for each field.
+    # Strategy: sources whose platform matches field semantics are listed first.
+    _field_platform_affinity: dict[str, list[str]] = {
+        "name":          ["linkedin", "twitter", "wikipedia"],
+        "current_role":  ["linkedin"],
+        "company":       ["linkedin", "crunchbase"],
+        "location":      ["linkedin", "twitter"],
+        "bio":           ["linkedin", "wikipedia", "twitter"],
+        "image_url":     ["linkedin", "twitter", "wikipedia"],
+        "social_links":  ["linkedin", "twitter", "github"],
+        "education":     ["linkedin", "wikipedia"],
+        "career_timeline": ["linkedin", "crunchbase"],
+        "notable_work":  ["wikipedia", "news", "web"],
+        "expertise":     ["linkedin", "web", "news"],
+        "key_facts":     ["linkedin", "wikipedia", "news", "web"],
+    }
+
+    result: dict = {"id": person.id}
+    for f in requested:
+        affinity = _field_platform_affinity.get(f, [])
+        sorted_sources = sorted(
+            all_sources,
+            key=lambda s: (
+                -(affinity.index(s.platform) if s.platform in affinity else len(affinity)),
+                -s.relevance_score,
+            ),
+        )
+        result[f] = {
+            "value": field_data.get(f),
+            "sources": [_source_to_dict(s) for s in sorted_sources[:5]],
+        }
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /persons/{person_id}/summary
+# ---------------------------------------------------------------------------
+@router.get("/persons/{person_id}/summary")
+async def get_person_summary(
+    person_id: str,
+    _auth=Depends(require_viewer),
+):
+    """
+    Return a concise summary of a person — no raw sources included.
+    Ideal for cards, previews, and CRM sync payloads.
+
+    Always returns:
+      id, name, current_role, company, location, image_url,
+      bio (first 400 chars), expertise (top 5), key_facts (top 5),
+      social_links, confidence_score, reputation_score, sources_count
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        sources_count_result = await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )
+        sources_count = len(sources_count_result.scalars().all())
+
+    bio = person.bio or ""
+    expertise = person.get_json("expertise") or []
+    key_facts = person.get_json("key_facts") or []
+
+    return {
+        "id": person.id,
+        "name": person.name,
+        "current_role": person.current_role,
+        "company": person.company,
+        "location": person.location,
+        "image_url": person.image_url,
+        "bio_snippet": bio[:400] + ("…" if len(bio) > 400 else ""),
+        "expertise": expertise[:5],
+        "key_facts": key_facts[:5],
+        "social_links": person.get_json("social_links") or {},
+        "confidence_score": person.confidence_score,
+        "reputation_score": person.reputation_score,
+        "sources_count": sources_count,
+        "last_updated": person.updated_at.isoformat() if person.updated_at else None,
+    }
+
+
