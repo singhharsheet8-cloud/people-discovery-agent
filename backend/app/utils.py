@@ -8,11 +8,18 @@ import httpx
 logger = logging.getLogger(__name__)
 
 MODEL_PRICING = {
+    # OpenAI
     "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
     "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "gpt-4o": {"input": 2.50, "output": 10.00},
+    # DeepSeek
     "deepseek-chat": {"input": 0.14, "output": 0.28},
+    # Groq (per million tokens, USD)
+    "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
+    "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
+    "llama3-8b-8192": {"input": 0.05, "output": 0.08},
+    "llama3-70b-8192": {"input": 0.59, "output": 0.79},
 }
 
 

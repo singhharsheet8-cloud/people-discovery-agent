@@ -142,6 +142,7 @@ async def _run_column_migrations() -> None:
 
     migrations = [
         "ALTER TABLE persons ADD COLUMN IF NOT EXISTS image_url TEXT;",
+        "ALTER TABLE person_sources ADD COLUMN IF NOT EXISTS scorer_reason VARCHAR(200);",
     ]
 
     try:

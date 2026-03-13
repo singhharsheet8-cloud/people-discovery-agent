@@ -3,6 +3,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.agent.state import AgentState
 from app.utils import invoke_llm_with_fallback
+from app.tools.source_scorer import score_sources
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,31 @@ def _format_input_for_prompt(input_data: dict) -> str:
 
 async def analyze_results(state: AgentState) -> dict:
     input_data = state.get("input", {})
+    search_results = state.get("search_results", [])
 
+    # ── Step 1: LLM source scoring (runs concurrently with analysis prep) ──
+    source_scores = await score_sources(target=input_data, results=search_results)
+
+    # Attach scores back onto each result so they flow into synthesizer / DB
+    scored_results = []
+    for i, r in enumerate(search_results):
+        r_copy = dict(r)
+        if i < len(source_scores):
+            sc = source_scores[i]
+            r_copy["relevance_score"] = sc["relevance"]
+            r_copy["source_reliability"] = sc["reliability"]
+            r_copy["corroboration_score"] = sc["corroboration"]
+            r_copy["confidence"] = sc["confidence"]
+            r_copy["scorer_reason"] = sc["reason"]
+        scored_results.append(r_copy)
+
+    # ── Step 2: Analyse / disambiguate with LLM ──
     results_summary = []
-    for i, r in enumerate(state.get("search_results", [])):
+    for i, r in enumerate(scored_results):
         results_summary.append(
             f"[{i}] ({r.get('source_type', 'web')}) {r.get('title', 'No title')}\n"
             f"    URL: {r.get('url', '')}\n"
+            f"    Confidence: {r.get('confidence', 0.5):.2f}\n"
             f"    Content: {r.get('content', '')[:600]}"
         )
 
@@ -73,10 +93,11 @@ async def analyze_results(state: AgentState) -> dict:
     user_prompt = f"""Original query / input:
 {input_str}
 
-Search results ({len(results_summary)} total):
+Search results ({len(results_summary)} total, pre-scored for source quality):
 {chr(10).join(results_summary)}
 
-Analyze these results and identify the person(s) they refer to."""
+Analyze these results and identify the person(s) they refer to.
+Prefer higher-confidence sources when resolving conflicts."""
 
     response, usage = await invoke_llm_with_fallback([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
@@ -101,15 +122,27 @@ Analyze these results and identify the person(s) they refer to."""
     best_idx = analysis.get("best_match_index", 0)
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
     best = people[best_idx] if best_idx >= 0 and people else {}
-    confidence_score = float(best.get("confidence", 0.5))
+
+    # Blend LLM self-confidence with average scored-source confidence
+    llm_conf = float(best.get("confidence", 0.5))
+    if source_scores:
+        avg_src_conf = sum(s["confidence"] for s in source_scores) / len(source_scores)
+        confidence_score = round((llm_conf * 0.6 + avg_src_conf * 0.4), 3)
+    else:
+        confidence_score = llm_conf
 
     logger.info(
-        f"Analysis found {len(people)} potential matches, "
-        f"{len(analysis.get('ambiguities', []))} ambiguities, confidence={confidence_score:.3f}"
+        "Analysis: %d matches, %d ambiguities, llm_conf=%.3f, src_avg=%.3f → final=%.3f",
+        len(people),
+        len(analysis.get("ambiguities", [])),
+        llm_conf,
+        sum(s["confidence"] for s in source_scores) / len(source_scores) if source_scores else 0,
+        confidence_score,
     )
 
     return {
         "analyzed_results": analysis,
+        "search_results": scored_results,   # propagate enriched results
         "confidence_score": confidence_score,
         "cost_tracker": cost_tracker,
         "status": "analysis_complete",
