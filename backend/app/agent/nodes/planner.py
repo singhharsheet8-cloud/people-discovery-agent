@@ -3,7 +3,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.config import get_settings
 from app.agent.state import AgentState
-from app.utils import invoke_llm_with_fallback
+from app.utils import invoke_reasoning_llm
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,15 @@ AVAILABLE SEARCH TYPES (use the ones that fit the available info):
 
 RULES:
 1. Generate 8-10 queries for maximum coverage across platforms
-2. If linkedin_url is provided, ALWAYS add a linkedin_profile query with that URL
+2. If linkedin_url is provided, ALWAYS add a linkedin_profile query with that exact URL — do NOT guess a URL
 3. If twitter_handle is provided, ALWAYS add a direct twitter query with that handle
 4. If github_username is provided, ALWAYS add a direct github query with that username
 5. ALWAYS include "web" and "news" for professionals
 6. Add "linkedin_posts" with name+company when available
 7. Add "youtube" for speakers/executives, "crunchbase" for founders, "scholar" for researchers
-8. Vary the query text — include name + company, name + role, name + domain
-9. Use the context field to inform which platforms are most relevant
+8. EVERY query string must be DIFFERENT — vary name+company, name+role, name+previous-company, name+domain
+9. Do NOT generate the same query string for multiple search types
+10. Use context field (previous companies, domain) to add extra targeted queries
 
 Respond with valid JSON only:
 {
@@ -85,7 +86,7 @@ Previous search results: {len(state.get("search_results", []))} results from pla
 
 Generate 8-10 targeted search queries across all relevant platforms. Use direct URLs/handles when provided. Cast a wide net."""
 
-    response, usage = await invoke_llm_with_fallback([
+    response, usage = await invoke_reasoning_llm([
         SystemMessage(content=PLANNER_SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ], label="planner", max_tokens=1024)
@@ -95,7 +96,39 @@ Generate 8-10 targeted search queries across all relevant platforms. Use direct 
 
     try:
         plan = json.loads(response.content)
-        queries = plan.get("queries", [])[:settings.max_search_queries]
+        raw_queries = plan.get("queries", [])
+
+        has_linkedin_url = bool(input_data.get("linkedin_url"))
+        name = input_data.get("name", "")
+        company = input_data.get("company", "")
+        base_q = f"{name} {company}".strip()
+
+        # Deduplicate + sanitize
+        seen_queries: set[str] = set()
+        queries = []
+        for q in raw_queries:
+            stype = q.get("search_type", "")
+            key   = q.get("query", "").lower().strip()
+
+            # Drop guessed linkedin_profile URLs — only keep if a real URL was provided
+            if stype == "linkedin_profile" and not has_linkedin_url:
+                continue
+
+            if key and key not in seen_queries:
+                seen_queries.add(key)
+                queries.append(q)
+
+        # Guarantee "web" and "news" are always present
+        existing_types = {q.get("search_type") for q in queries}
+        if "web" not in existing_types and name:
+            queries.insert(0, {"query": base_q, "search_type": "web",
+                                "rationale": "Broad web coverage"})
+        if "news" not in existing_types and name:
+            queries.append({"query": base_q, "search_type": "news",
+                             "rationale": "News and press coverage"})
+
+        queries = queries[:settings.max_search_queries]
+
     except json.JSONDecodeError:
         logger.warning("Failed to parse planner response, using fallback queries")
         name = input_data.get("name", input_data.get("context", "unknown"))
