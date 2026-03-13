@@ -184,7 +184,8 @@ async def execute_searches(state: AgentState) -> dict:
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_results = []
-    seen_urls = set()
+    seen_keys: set[tuple[str, str]] = set()
+    seen_urls: set[str] = set()
     urls_for_firecrawl = []
 
     for result_list in batch_results:
@@ -195,10 +196,13 @@ async def execute_searches(state: AgentState) -> dict:
         for result in result_list or []:
             result_dict = result.model_dump() if hasattr(result, "model_dump") else result
             url = result_dict.get("url", "")
-            if url and url not in seen_urls:
+            source_type = result_dict.get("source_type", "web")
+            dedup_key = (url.split("?")[0].rstrip("/"), source_type)
+            if url and dedup_key not in seen_keys:
+                seen_keys.add(dedup_key)
                 seen_urls.add(url)
                 all_results.append(result_dict)
-                if result_dict.get("source_type") in ("web", "news") and url:
+                if source_type in ("web", "news") and url:
                     urls_for_firecrawl.append(url)
 
     if urls_for_firecrawl:
@@ -208,7 +212,10 @@ async def execute_searches(state: AgentState) -> dict:
                 for r in deep_results:
                     r_dict = r if isinstance(r, dict) else r
                     url = r_dict.get("url", "")
-                    if url and url not in seen_urls:
+                    st = r_dict.get("source_type", "firecrawl")
+                    dk = (url.split("?")[0].rstrip("/"), st)
+                    if url and dk not in seen_keys:
+                        seen_keys.add(dk)
                         seen_urls.add(url)
                         all_results.append(r_dict)
         except Exception as e:
@@ -243,7 +250,10 @@ async def execute_searches(state: AgentState) -> dict:
                 for result in result_list or []:
                     r_dict = result.model_dump() if hasattr(result, "model_dump") else result
                     url = r_dict.get("url", "")
-                    if url and url not in seen_urls:
+                    st = r_dict.get("source_type", "")
+                    dk = (url.split("?")[0].rstrip("/"), st)
+                    if url and dk not in seen_keys:
+                        seen_keys.add(dk)
                         seen_urls.add(url)
                         all_results.append(r_dict)
 

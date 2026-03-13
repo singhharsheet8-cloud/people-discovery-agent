@@ -204,11 +204,10 @@ async def search_linkedin_by_name(person_name: str) -> list[dict]:
             snippet = item.get("snippet", "")
             if not url or "linkedin.com/in/" not in url:
                 continue
-            canon_url = url.split("?")[0].rstrip("/")
             results.append(
                 {
                     "title": title,
-                    "url": f"{canon_url}#serpapi",
+                    "url": url,
                     "content": snippet,
                     "source_type": "linkedin_profile",
                     "score": 0.85,
