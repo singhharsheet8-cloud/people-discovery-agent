@@ -94,7 +94,7 @@ async def seed_admin() -> None:
 
 
 async def init_db() -> None:
-    """Create all tables and seed admin. Called on app startup."""
+    """Create all tables, run column migrations, and seed admin. Called on app startup."""
     from app.models.db_models import (  # noqa: F401
         Person,
         PersonSource,
@@ -119,7 +119,34 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables initialized")
 
+    await _run_column_migrations()
     await seed_admin()
+
+
+async def _run_column_migrations() -> None:
+    """
+    Idempotent column additions for existing tables.
+    Uses ADD COLUMN IF NOT EXISTS so it's safe to run on every startup.
+    Only runs on PostgreSQL (SQLite handles new columns via create_all).
+    """
+    from sqlalchemy import text
+
+    settings = get_settings()
+    if "postgresql" not in settings.database_url and "postgres" not in settings.database_url:
+        return  # SQLite picks up new columns from create_all
+
+    migrations = [
+        "ALTER TABLE persons ADD COLUMN IF NOT EXISTS image_url TEXT;",
+    ]
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        for sql in migrations:
+            try:
+                await conn.execute(text(sql))
+                logger.info(f"Migration applied: {sql.strip()}")
+            except Exception as e:
+                logger.warning(f"Migration skipped ({sql.strip()}): {e}")
 
 
 async def close_db() -> None:
