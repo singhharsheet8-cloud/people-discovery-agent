@@ -170,7 +170,21 @@ export default function ComparePage() {
       {personLeft && personRight && (
         <div className="grid grid-cols-2 gap-6">
           <div className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-white">{personLeft.name}</h2>
+            <div className="flex items-center gap-3">
+              {personLeft.image_url ? (
+                <img
+                  src={personLeft.image_url}
+                  alt={personLeft.name}
+                  className="w-12 h-12 rounded-xl object-cover ring-1 ring-white/10"
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold text-white">
+                  {personLeft.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <h2 className="text-lg font-semibold text-white">{personLeft.name}</h2>
+            </div>
             <CompareValue
               label="Role"
               value={personLeft.current_role || "—"}
@@ -223,7 +237,21 @@ export default function ComparePage() {
             />
           </div>
           <div className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-white">{personRight.name}</h2>
+            <div className="flex items-center gap-3">
+              {personRight.image_url ? (
+                <img
+                  src={personRight.image_url}
+                  alt={personRight.name}
+                  className="w-12 h-12 rounded-xl object-cover ring-1 ring-white/10"
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold text-white">
+                  {personRight.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <h2 className="text-lg font-semibold text-white">{personRight.name}</h2>
+            </div>
             <CompareValue
               label="Role"
               value={personRight.current_role || "—"}

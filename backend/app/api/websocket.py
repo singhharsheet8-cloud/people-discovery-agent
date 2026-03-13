@@ -83,6 +83,7 @@ def _person_to_dict(person: Person) -> dict[str, Any]:
         "company": person.company,
         "location": person.location,
         "bio": person.bio,
+        "image_url": person.image_url,
         "education": person.get_json("education"),
         "key_facts": person.get_json("key_facts"),
         "social_links": person.get_json("social_links"),
