@@ -128,6 +128,7 @@ async def _run_column_migrations() -> None:
     Idempotent column additions for existing tables.
     Uses ADD COLUMN IF NOT EXISTS so it's safe to run on every startup.
     Only runs on PostgreSQL (SQLite handles new columns via create_all).
+    Non-fatal: any failure is logged and swallowed so startup is never blocked.
     """
     from sqlalchemy import text
 
@@ -139,14 +140,17 @@ async def _run_column_migrations() -> None:
         "ALTER TABLE persons ADD COLUMN IF NOT EXISTS image_url TEXT;",
     ]
 
-    engine = get_engine()
-    async with engine.begin() as conn:
-        for sql in migrations:
-            try:
-                await conn.execute(text(sql))
-                logger.info(f"Migration applied: {sql.strip()}")
-            except Exception as e:
-                logger.warning(f"Migration skipped ({sql.strip()}): {e}")
+    try:
+        engine = get_engine()
+        async with engine.begin() as conn:
+            for sql in migrations:
+                try:
+                    await conn.execute(text(sql))
+                    logger.info(f"Migration applied: {sql.strip()}")
+                except Exception as e:
+                    logger.warning(f"Migration skipped ({sql.strip()}): {e}")
+    except Exception as e:
+        logger.warning(f"Column migration step failed (non-fatal): {e}")
 
 
 async def close_db() -> None:
