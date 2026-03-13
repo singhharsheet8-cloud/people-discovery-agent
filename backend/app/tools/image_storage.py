@@ -17,9 +17,15 @@ import mimetypes
 import re
 import unicodedata
 
+import ssl
+
+import certifi
 import httpx
 
 from app.config import get_settings
+
+# Use certifi CA bundle so macOS Python 3.10 can verify LinkedIn/Wikipedia/Supabase TLS
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +119,7 @@ async def store_image_permanently(
         "apikey": settings.supabase_service_key,
     }
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, verify=_SSL_CONTEXT) as client:
         # 1. Ensure the bucket exists
         if not await _ensure_bucket(client, base, auth_headers):
             return None
