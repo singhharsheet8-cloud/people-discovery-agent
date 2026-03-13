@@ -27,28 +27,43 @@ def _build_database_url(url: str) -> str:
     return url
 
 
+def _use_transaction_pooler(url: str) -> str:
+    """Switch Supabase session-mode pooler (port 5432) to transaction-mode (port 6543).
+
+    Transaction mode handles far more concurrent connections because it releases
+    the backend PG connection at transaction boundaries rather than holding it
+    for the entire client session.
+    """
+    if "pooler.supabase.com:5432" in url:
+        return url.replace(":5432/", ":6543/")
+    return url
+
+
 def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        # Prefer SUPABASE_DATABASE_URL when set — this overrides Railway's
-        # auto-injected DATABASE_URL without needing to remove the Postgres plugin.
         raw_url = settings.supabase_database_url or settings.database_url
         database_url = _build_database_url(raw_url)
+        database_url = _use_transaction_pooler(database_url)
         engine_kwargs: dict = {
             "echo": settings.log_level.upper() == "DEBUG",
         }
         if "postgresql" in database_url:
-            # Supabase pooler (aws-*.pooler.supabase.com) works with ssl='require'.
-            # Using the full SSL context object causes issues with some pooler endpoints;
-            # the plain string 'require' is what asyncpg expects for pooler connections.
+            connect_args: dict = {"ssl": "require"}
+            # PgBouncer in transaction mode doesn't support prepared statements;
+            # disable asyncpg's statement cache to avoid "prepared statement does
+            # not exist" errors.
+            if "pooler.supabase.com" in database_url:
+                connect_args["statement_cache_size"] = 0
+                connect_args["prepared_statement_cache_size"] = 0
             engine_kwargs.update({
                 "pool_size": settings.db_pool_size,
                 "max_overflow": settings.db_pool_overflow,
                 "pool_recycle": settings.db_pool_recycle,
                 "pool_pre_ping": True,
-                "pool_timeout": 30,
-                "connect_args": {"ssl": "require"},
+                "pool_timeout": 60,
+                "connect_args": connect_args,
             })
         _engine = create_async_engine(database_url, **engine_kwargs)
     return _engine

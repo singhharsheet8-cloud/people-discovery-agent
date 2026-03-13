@@ -117,21 +117,6 @@ def _build_message(
     }
 
 
-async def broadcast_progress(
-    job_id: str,
-    step: str,
-    message: str,
-    progress: int,
-    data: dict[str, Any] | None = None,
-) -> None:
-    """
-    Send real-time progress to all WebSocket clients subscribed to a job.
-    Call this from the discovery pipeline to push updates.
-    """
-    payload = _build_message("progress", job_id, step=step, message=message, progress=progress, data=data)
-    await manager.send_progress(job_id, payload)
-
-
 def _validate_uuid(value: str) -> bool:
     """Validate UUID format."""
     try:

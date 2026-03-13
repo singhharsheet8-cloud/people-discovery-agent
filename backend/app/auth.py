@@ -124,12 +124,3 @@ require_viewer = require_role("admin", "viewer")
 require_api = require_role("admin", "viewer", "api_only")
 
 
-async def optional_auth(request: Request) -> dict | None:
-    """FastAPI dependency — returns user payload if valid token present, None otherwise."""
-    token = _extract_token(request)
-    if not token:
-        return None
-    payload = verify_token(token)
-    if payload and payload.get("type") == "refresh":
-        return None
-    return payload

@@ -3,7 +3,12 @@ backfill_images.py — Download and permanently store all existing profile image
 
 Uses curl for HTTP (avoids macOS Python SSL cert issues) and asyncpg for DB.
 
-Run after setting SUPABASE_URL and SUPABASE_SERVICE_KEY in .env:
+Required environment variables (set in backend/.env or shell):
+    DATABASE_URL           — PostgreSQL connection string
+    SUPABASE_URL           — e.g. https://<ref>.supabase.co
+    SUPABASE_SERVICE_KEY   — service-role JWT from Supabase dashboard
+
+Run:
     cd backend && python -m scripts.backfill_images
 """
 import asyncio
@@ -20,13 +25,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncpg
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-DB_URL = "postgresql://postgres.fpnlljelpepsjeznobhl:MPBVi6rJB8P95aTc@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres"
-SUPABASE_URL = "https://fpnlljelpepsjeznobhl.supabase.co"
-SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwbmxsamVscGVwc2plem5vYmhsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzM2MjE1NywiZXhwIjoyMDg4OTM4MTU3fQ.-NXsTaZ0K39lMX9h3ZDY6ETSgb1HG_lK6edzpP-R9fU"
+DB_URL = os.environ["DATABASE_URL"]
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
+SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 BUCKET = "profile-images"
 
 DOWNLOAD_HEADERS = [

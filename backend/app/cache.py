@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -9,6 +10,10 @@ from app.config import get_settings
 from app.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
+
+# Limit concurrent DB sessions to avoid pool exhaustion when 17+ search
+# tasks all check cache simultaneously.
+_db_semaphore = asyncio.Semaphore(8)
 
 REDIS_KEY_PREFIX = "pda:cache:"
 
@@ -32,7 +37,7 @@ SOURCE_TTL_MAP = {
     "linkedin": "cache_ttl_linkedin",
     "youtube": "cache_ttl_youtube",
     "blog": "cache_ttl_web",
-    # Legacy tool cache keys (github_search.py, youtube_search.py)
+    # Legacy cache keys retained for existing cached entries
     "youtube_api": "cache_ttl_youtube",
     "github_api": "cache_ttl_linkedin",
 }
@@ -86,20 +91,21 @@ async def get_cached_results(query: str, search_type: str) -> list[dict] | None:
         logger.info(f"Cache HIT (Redis) for '{query[:50]}' ({search_type})")
         return redis_results
 
-    # Fall back to DB
-    factory = get_session_factory()
-    async with factory() as session:
-        stmt = (
-            select(SearchCache)
-            .where(SearchCache.cache_key == query_hash, SearchCache.source_tool == search_type)
-            .order_by(SearchCache.created_at.desc())
-            .limit(1)
-        )
-        result = await session.execute(stmt)
-        entry = result.scalar_one_or_none()
-        if entry and not entry.is_expired:
-            logger.info(f"Cache HIT (DB) for '{query[:50]}' ({search_type})")
-            return entry.get_results()
+    # Fall back to DB (guarded by semaphore to avoid pool exhaustion)
+    async with _db_semaphore:
+        factory = get_session_factory()
+        async with factory() as session:
+            stmt = (
+                select(SearchCache)
+                .where(SearchCache.cache_key == query_hash, SearchCache.source_tool == search_type)
+                .order_by(SearchCache.created_at.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            entry = result.scalar_one_or_none()
+            if entry and not entry.is_expired:
+                logger.info(f"Cache HIT (DB) for '{query[:50]}' ({search_type})")
+                return entry.get_results()
     logger.debug(f"Cache MISS for '{query[:50]}' ({search_type})")
     return None
 
@@ -112,24 +118,25 @@ async def set_cached_results(query: str, search_type: str, results: list[dict]) 
     # Write to Redis (best-effort)
     await set_cached_redis(query_hash, results, ttl)
 
-    # Write to DB (persistent fallback)
-    factory = get_session_factory()
-    async with factory() as session:
-        await session.execute(
-            delete(SearchCache).where(
-                SearchCache.cache_key == query_hash,
-                SearchCache.source_tool == search_type,
+    # Write to DB (persistent fallback, guarded by semaphore)
+    async with _db_semaphore:
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                delete(SearchCache).where(
+                    SearchCache.cache_key == query_hash,
+                    SearchCache.source_tool == search_type,
+                )
             )
-        )
-        entry = SearchCache(
-            cache_key=query_hash,
-            source_tool=search_type,
-            response_data=json.dumps(results),
-            ttl_seconds=ttl,
-            expires_at=expires_at,
-        )
-        session.add(entry)
-        await session.commit()
+            entry = SearchCache(
+                cache_key=query_hash,
+                source_tool=search_type,
+                response_data=json.dumps(results),
+                ttl_seconds=ttl,
+                expires_at=expires_at,
+            )
+            session.add(entry)
+            await session.commit()
     logger.debug(f"Cached {len(results)} results for '{query[:50]}' ({search_type}), TTL={ttl}s")
 
 
