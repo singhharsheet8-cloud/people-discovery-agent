@@ -20,7 +20,6 @@ from app.models.db_models import (
     AuditLog,
     PublicShare,
     DiscoveryJob,
-    ApiUsageLog,
 )
 
 router = APIRouter(prefix="/api")

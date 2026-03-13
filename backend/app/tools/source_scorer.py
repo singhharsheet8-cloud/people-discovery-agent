@@ -88,6 +88,10 @@ def _build_user_prompt(target: dict, results: list[dict]) -> str:
     return "\n".join(parts)
 
 
+_BATCH_SIZE = 30
+_TOKENS_PER_RESULT = 80
+
+
 async def score_sources(
     target: dict,
     results: list[dict],
@@ -96,11 +100,12 @@ async def score_sources(
 
     Each dict: {relevance, reliability, corroboration, confidence, reason}
     Falls back to heuristic defaults if the LLM call fails.
+
+    Large result sets are scored in batches to stay within token limits.
     """
     if not results:
         return []
 
-    # Skip scoring if all results have no content (nothing meaningful to judge)
     has_content = any(
         (r.get("content") or r.get("snippet") or "").strip()
         for r in results
@@ -109,6 +114,25 @@ async def score_sources(
         logger.debug("[scorer] no content in results, using defaults")
         return _heuristic_scores(results)
 
+    if len(results) <= _BATCH_SIZE:
+        return await _score_batch(target, results, offset=0)
+
+    all_scores: list[dict] = []
+    for start in range(0, len(results), _BATCH_SIZE):
+        batch = results[start : start + _BATCH_SIZE]
+        batch_scores = await _score_batch(target, batch, offset=start)
+        all_scores.extend(batch_scores)
+    return all_scores
+
+
+async def _score_batch(
+    target: dict,
+    results: list[dict],
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Score a single batch of results with appropriately-sized max_tokens."""
+    max_tokens = max(2048, len(results) * _TOKENS_PER_RESULT + 256)
+
     try:
         response, usage = await invoke_llm_with_fallback(
             [
@@ -116,21 +140,25 @@ async def score_sources(
                 HumanMessage(content=_build_user_prompt(target, results)),
             ],
             label="source_scorer",
-            max_tokens=2048,
+            max_tokens=max_tokens,
         )
         logger.debug(
-            "[scorer] scored %d sources  tokens_in=%d tokens_out=%d cost=$%.5f",
+            "[scorer] scored batch of %d (offset=%d)  tokens_in=%d tokens_out=%d cost=$%.5f",
             len(results),
+            offset,
             usage.get("input_tokens", 0),
             usage.get("output_tokens", 0),
             usage.get("cost", 0),
         )
-        raw = json.loads(response.content)
+        text = response.content.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        raw = json.loads(text)
         scored = raw.get("scores", [])
         return _merge_with_defaults(results, scored)
 
     except Exception as exc:
-        logger.warning("[scorer] LLM scoring failed (%s), using heuristics", exc)
+        logger.warning("[scorer] LLM scoring failed for batch offset=%d (%s), using heuristics", offset, exc)
         return _heuristic_scores(results)
 
 
