@@ -215,14 +215,10 @@ REASONING_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
 REASONING_BASE_URL=https://api.groq.com/openai/v1
 
 # ── LLM Tier 3: Synthesis (richest final profile) ─────────────────────────────
-# Model: openai/gpt-oss-20b on Groq  |  1000 TPS  |  $0.075/$0.30 per 1M tokens
-# 3x faster + 66% cheaper than llama-3.3-70b, same quality as gpt-4.1-mini
-SYNTHESIS_MODEL=openai/gpt-oss-20b
-SYNTHESIS_BASE_URL=https://api.groq.com/openai/v1
-SYNTHESIS_API_KEY=gsk_...     # can reuse GROQ_API_KEY value
-
-# ── Sentiment analysis (OpenAI gpt-4.1-mini, on-demand only) ─────────────────
-OPENAI_API_KEY=sk-...         # Optional — only used for /sentiment and /influence endpoints
+# Model: gpt-4.1-mini (OpenAI)  |  best narrative quality
+# Fallback chain: gpt-4.1-mini → llama-4-scout (131k ctx) → llama-3.1-8b
+SYNTHESIS_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=sk-...         # Required for synthesis (Tier 3) + /sentiment + /influence
 
 # ── Search sources ────────────────────────────────────────────────────────────
 TAVILY_API_KEY=tvly-...       # Required for web/news search
@@ -484,6 +480,105 @@ curl -X POST https://people-discovery-agent-production.up.railway.app/api/person
 ```
 ```json
 {"job_id": "new-uuid", "status": "running", "message": "Re-search started."}
+```
+
+#### `POST /api/persons/{id}/refresh-image`
+Clear the stored profile image and re-resolve it from scratch (LinkedIn → Wikipedia → Knowledge Graph waterfall). Useful when the current image is wrong (group photo, news photo, etc.).
+
+```bash
+curl -X POST https://people-discovery-agent-production.up.railway.app/api/persons/<id>/refresh-image \
+  -H "Authorization: Bearer <token>"
+```
+```json
+{
+  "person_id": "cb8a7ef8-...",
+  "name": "Sam Altman",
+  "image_url": "https://fpnlljelpepsjeznobhl.supabase.co/storage/v1/object/public/profile-images/sam-altman-d032b9ad.jpg",
+  "message": "Image refreshed successfully."
+}
+```
+
+---
+
+### Profile Retrieval APIs
+
+Two purpose-built read endpoints for consuming profile data — one for full data, one for selective field access with provenance.
+
+#### `GET /api/persons/{id}/summary`
+Returns the **complete profile** of a person — all fields, no source list attached. Ideal for cards, CRM sync, and display pages.
+
+```bash
+curl https://people-discovery-agent-production.up.railway.app/api/persons/<id>/summary \
+  -H "Authorization: Bearer <token>"
+```
+```json
+{
+  "id": "cb8a7ef8-...",
+  "name": "Sam Altman",
+  "current_role": "Chief Executive Officer (CEO) and Co-Founder",
+  "company": "OpenAI",
+  "location": "San Francisco, California, United States",
+  "image_url": "https://...supabase.co/.../sam-altman.jpg",
+  "bio": "Full biography text...",
+  "expertise": ["Artificial Intelligence", "Machine Learning", "Startup Acceleration"],
+  "key_facts": ["Co-founded OpenAI in 2015", "Previously president of Y Combinator"],
+  "notable_work": ["Leading development of ChatGPT", "Driving GPT-4 advancements"],
+  "education": ["Computer Science (incomplete), Stanford University"],
+  "career_timeline": [
+    {"type": "role", "title": "Co-Founder and CEO", "company": "OpenAI", "start_date": "2015", "end_date": "Present"}
+  ],
+  "social_links": {"linkedin": "https://www.linkedin.com/in/sam-altman", "twitter": "https://x.com/sama"},
+  "confidence_score": 0.808,
+  "reputation_score": null,
+  "sources_count": 67,
+  "last_updated": "2026-03-14T10:58:34.952435+00:00"
+}
+```
+
+#### `GET /api/persons/{id}/fields?fields=name,current_role,company,...`
+Returns **only the fields you request**, each annotated with its top sources and a per-field confidence score. Source ranking is field-aware: `current_role` surfaces LinkedIn first, `bio` surfaces Wikipedia, `notable_work` surfaces news.
+
+**Available fields:** `name`, `current_role`, `company`, `location`, `bio`, `image_url`, `education`, `key_facts`, `social_links`, `expertise`, `notable_work`, `career_timeline`, `confidence_score`, `reputation_score`, `status`, `version`, `created_at`, `updated_at`
+
+```bash
+curl "https://people-discovery-agent-production.up.railway.app/api/persons/<id>/fields?fields=name,current_role,company,location" \
+  -H "Authorization: Bearer <token>"
+```
+```json
+{
+  "id": "cb8a7ef8-...",
+  "person": {
+    "name": "Sam Altman",
+    "company": "OpenAI",
+    "current_role": "Chief Executive Officer (CEO) and Co-Founder"
+  },
+  "overall_confidence": 0.808,
+  "total_sources": 67,
+  "fields": {
+    "name": {
+      "value": "Sam Altman",
+      "confidence_score": 0.964,
+      "sources": [
+        {
+          "platform": "crunchbase",
+          "source_type": "crunchbase",
+          "url": "https://www.crunchbase.com/person/sam-altman",
+          "title": "Sam Altman - CEO & Co-Founder @ OpenAI",
+          "confidence_score": 0.98,
+          "relevance_score": 1.0,
+          "source_reliability": 0.95,
+          "scorer_reason": "Direct LinkedIn profile for the exact target person",
+          "fetched_at": "2026-03-13T13:15:25Z"
+        }
+      ]
+    },
+    "current_role": {
+      "value": "Chief Executive Officer (CEO) and Co-Founder",
+      "confidence_score": 0.964,
+      "sources": [ "..." ]
+    }
+  }
+}
 ```
 
 ---
@@ -1033,21 +1128,21 @@ curl "https://people-discovery-agent-production.up.railway.app/api/suggest?q=Pra
 
 ## LLM Strategy
 
-All production inference runs on **[Groq](https://groq.com)** — the fastest LLM inference platform, running open-weight models at 560–1000 tokens/second.
+The pipeline uses a **hybrid Groq + OpenAI** architecture — Groq for ultra-fast planning and reasoning, OpenAI for highest-quality synthesis.
 
 ### Three-Tier Architecture
 
-| Tier | Stage | Model | Provider | TPS | Cost (per 1M tokens) |
-|------|-------|-------|----------|-----|---------------------|
-| **1 — Planning** | `plan_searches` + `source_scorer` | `llama-3.1-8b-instant` | Groq | 560 | $0.05 in / $0.08 out |
-| **2 — Reasoning** | `analyze_results` (disambiguation) | `llama-4-scout-17b-16e-instruct` | Groq | 750 | $0.11 in / $0.34 out |
-| **3 — Synthesis** | `synthesize_profile` | `openai/gpt-oss-20b` | Groq | 1000 | $0.075 in / $0.30 out |
+| Tier | Stage | Model | Provider | Speed | Cost (per 1M tokens) |
+|------|-------|-------|----------|-------|---------------------|
+| **1 — Planning** | `plan_searches` + `source_scorer` | `llama-3.1-8b-instant` | Groq | 560 TPS | $0.05 in / $0.08 out |
+| **2 — Reasoning** | `analyze_results` (disambiguation) | `llama-4-scout-17b-16e-instruct` | Groq | 750 TPS | $0.11 in / $0.34 out |
+| **3 — Synthesis** | `synthesize_profile` | `gpt-4.1-mini` | OpenAI | — | $0.40 in / $1.60 out |
 | _(on-demand only)_ | `/sentiment`, `/influence` | `gpt-4.1-mini` | OpenAI | — | $0.40 in / $1.60 out |
 
 ### Why This Setup
 
 **Tier 1 — `llama-3.1-8b-instant` (Planning & Source Scoring)**
-- Generates 8-10 diverse search queries with deduplication and mandatory source coverage
+- Generates 8–10 diverse search queries with deduplication and mandatory source coverage
 - LLM-powered source confidence scoring: rates each result on `relevance`, `reliability`, and `corroboration`
 - Benchmarked at **100% accuracy** detecting irrelevant sources (namesakes, wrong people)
 - 560 TPS, ~0.35s latency, $0.000021/call — the cheapest stage by far
@@ -1058,28 +1153,17 @@ All production inference runs on **[Groq](https://groq.com)** — the fastest LL
 - Extracts structured facts (role, employer, education, skills) from raw search results
 - ~0.62s latency for full disambiguation of 15 sources
 
-**Tier 3 — `openai/gpt-oss-20b` via Groq (Synthesis)**
-- Generates the final 400-600 word professional bio, career timeline, key facts
-- Groq's `gpt-oss-20b` runs at **1000 TPS** — fastest synthesis option available
-- **3× faster** and **66% cheaper** than `llama-3.3-70b-versatile` (previous model) with identical quality
-- ~0.49s latency for 15-source synthesis, $0.000137/call
-
-### vs. OpenAI `gpt-4.1-mini` (Benchmark, March 2026)
-
-| Metric | Groq pipeline | OpenAI gpt-4.1-mini (all stages) |
-|--------|--------------|-----------------------------------|
-| Cost per discovery (LLM) | **~$0.000235** | ~$0.00135 |
-| Total LLM latency | **~3.2s** | ~9-12s (estimated) |
-| Source scorer accuracy | **100%** (llama-3.1-8b) | ~95% (gpt-4.1-mini) |
-| Disambiguation accuracy | **100%** (llama-4-scout) | ~95% |
-| Synthesis quality | ✅ Equivalent | ✅ Equivalent |
-| **Savings** | **83% cheaper · 3× faster** | baseline |
+**Tier 3 — `gpt-4.1-mini` via OpenAI (Synthesis)**
+- Generates the final 400–600 word professional bio, career timeline, key facts
+- Best narrative quality and instruction-following for structured profile generation
+- **Adaptive token budgeting**: dynamically truncates sources to fit the 128k context window
+- Fallback chain on overflow/rate-limit: `gpt-4.1-mini` → `llama-4-scout` (131k ctx) → `llama-3.1-8b`
 
 ### Fallback Behaviour
-If `GROQ_API_KEY` is missing, the system falls back to:
-1. `OPENAI_API_KEY` → OpenAI for all stages
-2. `ANTHROPIC_API_KEY` → Claude for synthesis only
-3. `DEEPSEEK_API_KEY` → DeepSeek for synthesis only
+If a model hits rate limits or context overflow, the system automatically falls back:
+1. Synthesis: `gpt-4.1-mini` → `llama-4-scout-17b` (Groq, 131k context) → `llama-3.1-8b` (Groq, 128k context)
+2. Planning/Scoring: `llama-3.1-8b` → `gpt-4.1-mini` (OpenAI)
+3. Reasoning: `llama-4-scout` → `llama-3.1-8b` (Groq)
 
 ---
 
