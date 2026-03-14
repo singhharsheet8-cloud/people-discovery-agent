@@ -1,34 +1,39 @@
 """
-Profile image resolution — guaranteed LinkedIn-first waterfall.
+Profile image resolution — quality-first waterfall.
 
-Why the old Tier-2 failed:
-  SerpAPI engine=google organic results almost never carry thumbnails for
-  LinkedIn profiles.  What actually works is engine=google_images, which
-  returns real media.licdn.com CDN URLs that are publicly accessible.
+Goals:
+  - Only accept headshots / portrait photos (aspect ratio ~0.7–1.5, minimum 150px)
+  - Never accept landscape images (news photos, group shots)
+  - Prefer LinkedIn profile CDN URLs as the gold standard
+  - Provide ordered fallbacks that degrade gracefully
 
-Tiers (in order, stops at first confirmed hit):
+Tiers (stops at first confirmed, quality-validated hit):
   1. In-memory structured data  — Apify LinkedIn profilePicUrl, GitHub
                                   avatar_url, Instagram profile_pic
                                   → ZERO extra API calls
   2. SerpAPI Google Images (handle-precise) — if we already know the
                                   LinkedIn handle, search:
-                                  'linkedin.com/in/<handle> profile photo'
+                                  '"Name" linkedin.com/in/<handle> profile'
                                   → most precise, fewest false positives
-  3. SerpAPI Google Images (name+company) — '"Name" "Company" linkedin
+  3. Wikipedia REST API           — free, no key, ideal for public figures;
+                                  Wikipedia portrait images are usually headshots
+  4. SerpAPI Knowledge Graph      — Google panel image, famous people
+  5. SerpAPI Google Images (name+company) — '"Name" "Company" linkedin
                                   profile photo' → filters for
                                   media.licdn.com/dms/image CDN URLs
-                                  → works for ANY LinkedIn user
-  4. Wikipedia REST API           — free, no key, ideal for public figures
-  5. SerpAPI Knowledge Graph      — Google panel image, famous people
   6. SerpAPI organic thumbnail    — last-resort Google web-search thumbnail
 
-Each candidate URL is validated with a HEAD request (≤3 s) before being
-accepted, so broken/redirected URLs are silently skipped.
+Quality gates applied to every candidate URL:
+  - HTTP 200 + Content-Type: image/*
+  - Dimensions: min 100px on each side
+  - Aspect ratio: width/height between 0.5 and 2.0 (portrait/square bias)
+    (landscape images like 800x600 news photos are rejected)
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 import urllib.parse
@@ -50,11 +55,17 @@ def _get_store_fn():
         _store_image_permanently = store_image_permanently
     return _store_image_permanently
 
+
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v3"
+_CACHE_TOOL = "image_resolver_v4"  # bumped version to bypass old bad cache
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
+
+# Aspect ratio bounds — outside this range → not a headshot
+_MIN_ASPECT = 0.45   # very tall portrait is fine
+_MAX_ASPECT = 1.65   # 1800x1200 landscape would be 1.5 → reject at 1.65
+_MIN_DIMENSION = 100  # pixels — ignore tiny thumbnails
 
 
 # ---------------------------------------------------------------------------
@@ -69,9 +80,8 @@ async def resolve_profile_image(
     """
     Return a publicly-accessible image URL for the person, or None.
 
-    Tries each tier in order and stops as soon as a valid URL is confirmed
-    (HTTP 200, Content-Type: image/*).  Results are cached so repeated calls
-    for the same person cost nothing.
+    Tries each tier in order and stops as soon as a valid, portrait-shaped
+    URL is confirmed.  Results are cached so repeated calls cost nothing.
     """
     if not name:
         return None
@@ -91,9 +101,9 @@ async def resolve_profile_image(
     tiers: list[tuple[str, asyncio.coroutine]] = [
         ("T1-structured",      _async(lambda: _extract_from_sources(results))),
         ("T2-gimg-handle",     _serpapi_gimg_handle(name, company, linkedin_handle)),
-        ("T3-gimg-name",       _serpapi_gimg_name(name, company)),
-        ("T4-wikipedia",       _wikipedia_image(name)),
-        ("T5-serp-kg",         _serpapi_knowledge_graph(name, company)),
+        ("T3-wikipedia",       _wikipedia_image(name)),
+        ("T4-serp-kg",         _serpapi_knowledge_graph(name, company)),
+        ("T5-gimg-name",       _serpapi_gimg_name(name, company)),
         ("T6-serp-organic",    _serpapi_organic_thumbnail(name, company)),
     ]
 
@@ -107,9 +117,10 @@ async def resolve_profile_image(
         if not url:
             continue
 
-        # Validate: must return 200 with an image Content-Type
-        if not await _is_image_url(url):
-            logger.debug(f"[image] {label} URL failed validation for {name!r}: {url[:80]}")
+        # Validate: must return 200 with an image Content-Type AND good dimensions
+        ok, reason = await _validate_image(url)
+        if not ok:
+            logger.debug(f"[image] {label} rejected for {name!r}: {reason} — {url[:80]}")
             continue
 
         logger.info(f"[image] {label} → {name!r}: {url[:90]}")
@@ -122,7 +133,7 @@ async def resolve_profile_image(
         await _cache(cache_key, final_url)
         return final_url
 
-    logger.info(f"[image] no image found for {name!r}")
+    logger.info(f"[image] no quality image found for {name!r}")
     return None
 
 
@@ -140,6 +151,76 @@ async def _upload_to_storage(url: str, name: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Quality validation
+# ---------------------------------------------------------------------------
+
+async def _validate_image(url: str, timeout: float = 5.0) -> tuple[bool, str]:
+    """
+    Return (True, "ok") if the URL points to a headshot-quality image, else
+    (False, reason).
+
+    Checks:
+      1. HTTP 200 with Content-Type: image/*
+      2. Minimum dimensions (≥ _MIN_DIMENSION on both axes)
+      3. Aspect ratio in [_MIN_ASPECT, _MAX_ASPECT]
+    """
+    if not url or not url.startswith("http"):
+        return False, "bad url"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+            # First do a HEAD to check status + content-type cheaply
+            try:
+                r = await c.head(url)
+                status = r.status_code
+                ct = r.headers.get("content-type", "")
+            except Exception:
+                # Some servers reject HEAD — fall through to GET
+                status, ct = 0, ""
+
+            if status not in (0, 200, 206, 405, 403):
+                return False, f"http {status}"
+
+            if status in (405, 403) or not ct.startswith("image/"):
+                # Need a GET to get content-type and bytes
+                r2 = await c.get(url)
+                if r2.status_code not in (200, 206):
+                    return False, f"http {r2.status_code}"
+                ct = r2.headers.get("content-type", "")
+                content = r2.content
+            else:
+                # Full GET to check dimensions
+                r2 = await c.get(url)
+                if r2.status_code not in (200, 206):
+                    return False, f"http GET {r2.status_code}"
+                content = r2.content
+
+            if not ct.startswith("image/"):
+                return False, f"not image: {ct}"
+
+            # Decode image to get dimensions
+            try:
+                from PIL import Image  # type: ignore
+                img = Image.open(io.BytesIO(content))
+                w, h = img.size
+            except Exception:
+                # Pillow not available or can't decode — accept on content-type alone
+                return True, "ok (no dim check)"
+
+            if w < _MIN_DIMENSION or h < _MIN_DIMENSION:
+                return False, f"too small: {w}x{h}"
+
+            aspect = w / h
+            if aspect < _MIN_ASPECT or aspect > _MAX_ASPECT:
+                return False, f"bad aspect ratio {aspect:.2f} ({w}x{h})"
+
+            return True, "ok"
+
+    except Exception as e:
+        return False, f"error: {e}"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -148,25 +229,6 @@ def _async(fn):
     async def _wrapper():
         return fn()
     return _wrapper()
-
-
-async def _is_image_url(url: str, timeout: float = 4.0) -> bool:
-    """Return True only if url responds 200 with Content-Type: image/*."""
-    if not url or not url.startswith("http"):
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-            r = await c.head(url)
-            if r.status_code == 200:
-                ct = r.headers.get("content-type", "")
-                return ct.startswith("image/")
-            # Some CDNs don't allow HEAD — fall back to a tiny GET
-            if r.status_code in (405, 403):
-                r2 = await c.get(url, headers={"Range": "bytes=0-0"})
-                return r2.status_code in (200, 206)
-    except Exception:
-        pass
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +287,6 @@ def _extract_linkedin_handle(results: list[dict]) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Tier 2 — SerpAPI Google Images, handle-precise
-# Searches: '"handle" site:linkedin.com profile photo'
-# Most precise — uses the exact LinkedIn slug we already discovered.
 # ---------------------------------------------------------------------------
 
 async def _serpapi_gimg_handle(
@@ -239,13 +299,73 @@ async def _serpapi_gimg_handle(
         return None
 
     query = f'"{name}" linkedin.com/in/{handle} profile photo'
-    return await _serpapi_gimg_query(query, api_key)
+    return await _serpapi_gimg_query(query, api_key, require_linkedin=True)
 
 
 # ---------------------------------------------------------------------------
-# Tier 3 — SerpAPI Google Images, name + company
-# Searches: '"Name" "Company" linkedin profile photo'
-# Works for ANY person who has a LinkedIn profile — proven approach.
+# Tier 3 — Wikipedia REST API (free, no key) — MOVED UP before Google Images
+# Wikipedia portraits are almost always actual headshots, not news photos.
+# ---------------------------------------------------------------------------
+
+async def _wikipedia_image(name: str) -> str | None:
+    encoded = urllib.parse.quote(name.replace(" ", "_"))
+    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+    try:
+        resp = await resilient_request(
+            "get", url,
+            headers={"User-Agent": "PeopleDiscoveryAgent/2.0"},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            thumbnail = resp.json().get("thumbnail", {})
+            img = thumbnail.get("source", "")
+            if img:
+                # Upscale Wikipedia thumbnail to 800px for better quality
+                img = re.sub(r"/\d+px-", "/800px-", img)
+            return img or None
+    except Exception as e:
+        logger.debug(f"[image] Wikipedia failed for {name!r}: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 4 — SerpAPI Knowledge Graph
+# Google's knowledge panel image is curated and usually a proper headshot.
+# ---------------------------------------------------------------------------
+
+async def _serpapi_knowledge_graph(
+    name: str, company: str | None
+) -> str | None:
+    api_key = get_settings().serpapi_api_key
+    if not api_key:
+        return None
+
+    query = f"{name} {company}" if company else name
+    try:
+        resp = await resilient_request(
+            "get",
+            "https://serpapi.com/search.json",
+            params={"engine": "google", "q": query, "api_key": api_key, "num": 1},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            kg = resp.json().get("knowledge_graph", {})
+            img = (
+                kg.get("image")
+                or kg.get("thumbnail")
+                or (kg.get("header_images") or [{}])[0].get("image", "")
+            )
+            if img and isinstance(img, str) and img.startswith("http"):
+                return img
+    except Exception as e:
+        logger.debug(f"[image] SerpAPI KG failed for {name!r}: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 5 — SerpAPI Google Images, name + company
+# Only accept LinkedIn CDN profile-displayphoto URLs — never accept random
+# image results which may be news photos / group shots.
 # ---------------------------------------------------------------------------
 
 async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
@@ -258,19 +378,24 @@ async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
         parts.append(f'"{company}"')
     parts.append("linkedin profile photo")
     query = " ".join(parts)
-    return await _serpapi_gimg_query(query, api_key)
+    # For name+company searches, ONLY accept confirmed LinkedIn CDN URLs
+    # to avoid picking up press/news photos for famous people
+    return await _serpapi_gimg_query(query, api_key, require_linkedin=True)
 
 
-async def _serpapi_gimg_query(query: str, api_key: str) -> str | None:
+async def _serpapi_gimg_query(
+    query: str,
+    api_key: str,
+    require_linkedin: bool = False,
+) -> str | None:
     """
-    Run a Google Images SerpAPI query and return the first confirmed
-    direct (non-SerpAPI-cached) image URL.
+    Run a Google Images SerpAPI query and return the best confirmed image URL.
 
     Priority within results:
       1. LinkedIn CDN profile photos (media.licdn.com/dms/image/*/profile-displayphoto)
-      2. Any other direct permanent URL (not serpapi.com, not a redirect)
-    SerpAPI-hosted thumbnails (serpapi.com/searches/...) are skipped —
-    they are ephemeral cache entries that expire within days.
+      2. If require_linkedin=False: any other direct permanent URL
+
+    SerpAPI-hosted thumbnails (serpapi.com/searches/...) are always skipped.
     """
     try:
         resp = await resilient_request(
@@ -306,71 +431,13 @@ async def _serpapi_gimg_query(query: str, api_key: str) -> str | None:
                 linkedin_hit = original
                 break  # best possible result
 
-            if fallback_hit is None:
+            if fallback_hit is None and not require_linkedin:
                 fallback_hit = original
 
         return linkedin_hit or fallback_hit
 
     except Exception as e:
         logger.debug(f"[image] SerpAPI Google Images failed ({query[:60]}): {e}")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Tier 4 — Wikipedia REST API (free, no key)
-# ---------------------------------------------------------------------------
-
-async def _wikipedia_image(name: str) -> str | None:
-    encoded = urllib.parse.quote(name.replace(" ", "_"))
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
-    try:
-        resp = await resilient_request(
-            "get", url,
-            headers={"User-Agent": "PeopleDiscoveryAgent/2.0"},
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            thumbnail = resp.json().get("thumbnail", {})
-            img = thumbnail.get("source", "")
-            if img:
-                # Upscale thumbnail to 400 px for better quality
-                img = re.sub(r"/\d+px-", "/400px-", img)
-            return img or None
-    except Exception as e:
-        logger.debug(f"[image] Wikipedia failed for {name!r}: {e}")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Tier 5 — SerpAPI Knowledge Graph
-# ---------------------------------------------------------------------------
-
-async def _serpapi_knowledge_graph(
-    name: str, company: str | None
-) -> str | None:
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return None
-
-    query = f"{name} {company}" if company else name
-    try:
-        resp = await resilient_request(
-            "get",
-            "https://serpapi.com/search.json",
-            params={"engine": "google", "q": query, "api_key": api_key, "num": 1},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            kg = resp.json().get("knowledge_graph", {})
-            img = (
-                kg.get("image")
-                or kg.get("thumbnail")
-                or (kg.get("header_images") or [{}])[0].get("image", "")
-            )
-            if img and isinstance(img, str) and img.startswith("http"):
-                return img
-    except Exception as e:
-        logger.debug(f"[image] SerpAPI KG failed for {name!r}: {e}")
     return None
 
 

@@ -957,6 +957,83 @@ async def re_search_person(person_id: str, _admin=Depends(require_admin)):
     return {"job_id": job_id, "status": "running", "message": "Re-search started."}
 
 
+@router.post("/persons/{person_id}/refresh-image")
+async def refresh_person_image(person_id: str, _admin=Depends(require_admin)):
+    """
+    Clear and re-resolve the profile image for a person without a full re-discovery.
+
+    Useful when the stored image is incorrect (wrong person, landscape photo, etc.).
+    The image resolver will run the full waterfall (LinkedIn, Wikipedia, Knowledge
+    Graph, etc.) and store the best quality headshot it finds.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        person = (await session.execute(
+            select(Person).where(Person.id == person_id)
+        )).scalar_one_or_none()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        name = person.name
+        company = person.company
+
+        # Get existing sources to give the resolver context (LinkedIn handle etc.)
+        sources_rows = (await session.execute(
+            select(PersonSource).where(PersonSource.person_id == person_id)
+        )).scalars().all()
+        search_results = []
+        for s in sources_rows:
+            entry: dict = {
+                "url": s.url or "",
+                "source_type": s.source_type or "",
+            }
+            if s.structured_data:
+                try:
+                    entry["structured"] = json.loads(s.structured_data)
+                except Exception:
+                    pass
+            search_results.append(entry)
+
+        # Clear old image so resolver doesn't hit the old (bad) cached value
+        person.image_url = None
+        await session.commit()
+
+    # Run resolver outside the session
+    from app.cache import set_cached_results  # noqa: PLC0415
+    # Invalidate the old cache entry for this person
+    old_cache_key = f"{name}|{company or ''}"
+    for tool_name in ("image_resolver_v3", "image_resolver_v4"):
+        try:
+            await set_cached_results(old_cache_key, tool_name, [])
+        except Exception:
+            pass
+
+    from app.tools.image_resolver import resolve_profile_image  # noqa: PLC0415
+    new_image_url = await resolve_profile_image(name, company, search_results)
+
+    if new_image_url:
+        async with factory() as session:
+            person = (await session.execute(
+                select(Person).where(Person.id == person_id)
+            )).scalar_one_or_none()
+            if person:
+                person.image_url = new_image_url
+                await session.commit()
+        return {
+            "person_id": person_id,
+            "name": name,
+            "image_url": new_image_url,
+            "message": "Image refreshed successfully.",
+        }
+    else:
+        return {
+            "person_id": person_id,
+            "name": name,
+            "image_url": None,
+            "message": "No suitable image found. Profile left without image.",
+        }
+
+
 # --- Cost dashboard ---
 
 @router.get("/admin/rate-limits")
