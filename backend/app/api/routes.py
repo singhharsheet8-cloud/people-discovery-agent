@@ -1682,8 +1682,9 @@ def _person_to_dict(person: Person) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# All available field names a caller can request in /fields
+# Helpers for /fields and /summary
 # ---------------------------------------------------------------------------
+
 _SCALAR_FIELDS = {
     "name", "current_role", "company", "location", "bio", "image_url",
     "confidence_score", "reputation_score", "status", "version",
@@ -1695,10 +1696,30 @@ _JSON_FIELDS = {
 }
 _ALL_FIELDS = _SCALAR_FIELDS | _JSON_FIELDS
 
+# Which platforms are most authoritative for each field.
+# Sources matching these platforms are ranked higher in the per-field source list.
+_FIELD_PLATFORM_AFFINITY: dict[str, list[str]] = {
+    "name":            ["linkedin", "twitter", "wikipedia", "crunchbase"],
+    "current_role":    ["linkedin", "crunchbase"],
+    "company":         ["linkedin", "crunchbase"],
+    "location":        ["linkedin", "twitter"],
+    "bio":             ["linkedin", "wikipedia", "twitter"],
+    "image_url":       ["linkedin", "twitter", "wikipedia"],
+    "social_links":    ["linkedin", "twitter", "github"],
+    "education":       ["linkedin", "wikipedia"],
+    "career_timeline": ["linkedin", "crunchbase"],
+    "notable_work":    ["wikipedia", "google_news", "web"],
+    "expertise":       ["linkedin", "web", "google_news"],
+    "key_facts":       ["linkedin", "wikipedia", "google_news", "web"],
+}
+
+# Source types that are always high-signal regardless of field
+_HIGH_SIGNAL_SOURCE_TYPES = {"linkedin_profile", "wikipedia", "crunchbase"}
+
 
 def _pick_fields(person: Person, fields: list[str]) -> dict:
     """Return only the requested fields from a Person ORM object."""
-    out: dict = {"id": person.id}
+    out: dict = {}
     for f in fields:
         if f in _SCALAR_FIELDS:
             val = getattr(person, f, None)
@@ -1709,16 +1730,55 @@ def _pick_fields(person: Person, fields: list[str]) -> dict:
 
 
 def _source_to_dict(src: PersonSource) -> dict:
+    """Serialise a PersonSource row to the public API shape."""
+    rel = src.relevance_score or 0.0
+    reliability = src.source_reliability or 0.0
+    # Combined confidence = weighted average of relevance + reliability
+    confidence = round((rel * 0.6 + reliability * 0.4), 3)
     return {
         "platform": src.platform,
         "source_type": src.source_type,
         "url": src.url,
         "title": src.title,
-        "relevance_score": round(src.relevance_score, 3),
-        "source_reliability": round(src.source_reliability, 3),
+        "confidence_score": confidence,
+        "relevance_score": round(rel, 3),
+        "source_reliability": round(reliability, 3),
         "scorer_reason": src.scorer_reason or None,
         "fetched_at": src.fetched_at.isoformat() if src.fetched_at else None,
     }
+
+
+def _sources_for_field(
+    all_sources: list,
+    field: str,
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Return the top *limit* sources most relevant to *field*.
+
+    Ranking logic (descending priority):
+      1. Sources whose source_type is in _HIGH_SIGNAL_SOURCE_TYPES
+      2. Sources whose platform matches _FIELD_PLATFORM_AFFINITY[field]
+         (ranked by position in the affinity list — first = most relevant)
+      3. Fallback: sorted by relevance_score desc
+    Only sources with relevance_score ≥ 0.5 are included unless there
+    aren't enough, in which case the threshold drops to 0.
+    """
+    affinity = _FIELD_PLATFORM_AFFINITY.get(field, [])
+
+    def sort_key(s):
+        high_signal = s.source_type in _HIGH_SIGNAL_SOURCE_TYPES
+        affinity_rank = affinity.index(s.platform) if s.platform in affinity else len(affinity)
+        rel = s.relevance_score or 0.0
+        # Lower tuple → higher priority (we sort ascending then reverse)
+        return (not high_signal, affinity_rank, -rel)
+
+    candidates = [s for s in all_sources if (s.relevance_score or 0) >= 0.5]
+    if len(candidates) < limit:
+        candidates = list(all_sources)  # relax threshold
+
+    ranked = sorted(candidates, key=sort_key)
+    return [_source_to_dict(s) for s in ranked[:limit]]
 
 
 # ---------------------------------------------------------------------------
@@ -1731,18 +1791,49 @@ async def get_person_fields(
     _auth=Depends(require_viewer),
 ):
     """
-    Return specific fields for a person, each annotated with the sources
-    that contributed to that field's value.
+    Return **specific fields** for a person, each annotated with the top
+    sources that support that field's value and a per-field confidence score.
 
-    **fields** — comma-separated list of field names to return.
-    Available fields:
-      name, current_role, company, location, bio, image_url,
-      education, key_facts, social_links, expertise, notable_work,
-      career_timeline, confidence_score, reputation_score,
-      status, version, created_at, updated_at
+    ### Query parameter
+    - **fields** — comma-separated field names (default: `name,current_role,company,image_url`)
 
-    Example:
-      GET /api/persons/{id}/fields?fields=name,company,current_role,image_url,social_links
+    ### Available fields
+    `name`, `current_role`, `company`, `location`, `bio`, `image_url`,
+    `education`, `key_facts`, `social_links`, `expertise`, `notable_work`,
+    `career_timeline`, `confidence_score`, `reputation_score`,
+    `status`, `version`, `created_at`, `updated_at`
+
+    ### Response shape
+    ```json
+    {
+      "id": "...",
+      "person": { "name": "...", "company": "..." },
+      "overall_confidence": 0.85,
+      "fields": {
+        "name": {
+          "value": "Sam Altman",
+          "confidence_score": 0.97,
+          "sources": [
+            {
+              "platform": "linkedin",
+              "url": "...",
+              "title": "...",
+              "confidence_score": 0.95,
+              "relevance_score": 0.95,
+              "source_reliability": 0.95,
+              "scorer_reason": "LinkedIn profile for the exact target person",
+              "fetched_at": "2026-03-13T..."
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+    ### Example
+    ```
+    GET /api/persons/{id}/fields?fields=name,company,current_role,location,bio,social_links
+    ```
     """
     requested = [f.strip() for f in fields.split(",") if f.strip()]
     unknown = [f for f in requested if f not in _ALL_FIELDS]
@@ -1767,41 +1858,43 @@ async def get_person_fields(
         )
         all_sources = sources_result.scalars().all()
 
-    field_data = _pick_fields(person, requested)
+    field_values = _pick_fields(person, requested)
 
-    # Build a source list for each field.
-    # Strategy: sources whose platform matches field semantics are listed first.
-    _field_platform_affinity: dict[str, list[str]] = {
-        "name":          ["linkedin", "twitter", "wikipedia"],
-        "current_role":  ["linkedin"],
-        "company":       ["linkedin", "crunchbase"],
-        "location":      ["linkedin", "twitter"],
-        "bio":           ["linkedin", "wikipedia", "twitter"],
-        "image_url":     ["linkedin", "twitter", "wikipedia"],
-        "social_links":  ["linkedin", "twitter", "github"],
-        "education":     ["linkedin", "wikipedia"],
-        "career_timeline": ["linkedin", "crunchbase"],
-        "notable_work":  ["wikipedia", "news", "web"],
-        "expertise":     ["linkedin", "web", "news"],
-        "key_facts":     ["linkedin", "wikipedia", "news", "web"],
-    }
-
-    result: dict = {"id": person.id}
+    # Build per-field blocks with field-appropriate source ranking
+    fields_out: dict = {}
     for f in requested:
-        affinity = _field_platform_affinity.get(f, [])
-        sorted_sources = sorted(
-            all_sources,
-            key=lambda s: (
-                -(affinity.index(s.platform) if s.platform in affinity else len(affinity)),
-                -s.relevance_score,
-            ),
-        )
-        result[f] = {
-            "value": field_data.get(f),
-            "sources": [_source_to_dict(s) for s in sorted_sources[:5]],
+        # Skip meta/score fields from source annotation — they don't have sources
+        if f in {"confidence_score", "reputation_score", "status", "version",
+                  "created_at", "updated_at"}:
+            fields_out[f] = {"value": field_values.get(f), "sources": []}
+            continue
+
+        field_sources = _sources_for_field(all_sources, f, limit=5)
+        # Per-field confidence: average of top sources' confidence scores
+        if field_sources:
+            field_confidence = round(
+                sum(s["confidence_score"] for s in field_sources) / len(field_sources), 3
+            )
+        else:
+            field_confidence = person.confidence_score or 0.0
+
+        fields_out[f] = {
+            "value": field_values.get(f),
+            "confidence_score": field_confidence,
+            "sources": field_sources,
         }
 
-    return result
+    return {
+        "id": person.id,
+        "person": {
+            "name": person.name,
+            "company": person.company,
+            "current_role": person.current_role,
+        },
+        "overall_confidence": person.confidence_score,
+        "total_sources": len(all_sources),
+        "fields": fields_out,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1813,13 +1906,31 @@ async def get_person_summary(
     _auth=Depends(require_viewer),
 ):
     """
-    Return a concise summary of a person — no raw sources included.
-    Ideal for cards, previews, and CRM sync payloads.
+    Return a **complete summary** of a person — all key profile fields with
+    no raw source list. Ideal for cards, previews, and CRM sync.
 
-    Always returns:
-      id, name, current_role, company, location, image_url,
-      bio (first 400 chars), expertise (top 5), key_facts (top 5),
-      social_links, confidence_score, reputation_score, sources_count
+    ### Response shape
+    ```json
+    {
+      "id": "...",
+      "name": "Sam Altman",
+      "current_role": "CEO",
+      "company": "OpenAI",
+      "location": "San Francisco, CA",
+      "image_url": "https://...",
+      "bio": "Full biography text...",
+      "expertise": ["AI", "Entrepreneurship"],
+      "key_facts": ["Co-founded OpenAI in 2015", ...],
+      "notable_work": [...],
+      "education": [...],
+      "career_timeline": [...],
+      "social_links": { "linkedin": "...", "twitter": "..." },
+      "confidence_score": 0.85,
+      "reputation_score": null,
+      "sources_count": 67,
+      "last_updated": "2026-03-14T..."
+    }
+    ```
     """
     factory = get_session_factory()
     async with factory() as session:
@@ -1829,14 +1940,12 @@ async def get_person_summary(
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
 
+        from sqlalchemy import func as sa_func  # noqa: PLC0415
         sources_count_result = await session.execute(
-            select(PersonSource).where(PersonSource.person_id == person_id)
+            select(sa_func.count()).select_from(PersonSource)
+            .where(PersonSource.person_id == person_id)
         )
-        sources_count = len(sources_count_result.scalars().all())
-
-    bio = person.bio or ""
-    expertise = person.get_json("expertise") or []
-    key_facts = person.get_json("key_facts") or []
+        sources_count = sources_count_result.scalar() or 0
 
     return {
         "id": person.id,
@@ -1845,9 +1954,12 @@ async def get_person_summary(
         "company": person.company,
         "location": person.location,
         "image_url": person.image_url,
-        "bio_snippet": bio[:400] + ("…" if len(bio) > 400 else ""),
-        "expertise": expertise[:5],
-        "key_facts": key_facts[:5],
+        "bio": person.bio,
+        "expertise": person.get_json("expertise") or [],
+        "key_facts": person.get_json("key_facts") or [],
+        "notable_work": person.get_json("notable_work") or [],
+        "education": person.get_json("education") or [],
+        "career_timeline": person.get_json("career_timeline") or [],
         "social_links": person.get_json("social_links") or {},
         "confidence_score": person.confidence_score,
         "reputation_score": person.reputation_score,
