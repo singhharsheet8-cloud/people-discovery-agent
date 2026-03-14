@@ -1,4 +1,4 @@
-"""Medium article search — RSS + SerpAPI primary, Apify fallback."""
+"""Medium article search — RSS + search_provider primary, Apify fallback."""
 
 import logging
 import xml.etree.ElementTree as ET
@@ -6,6 +6,7 @@ from html import unescape
 import re
 
 from app.cache import get_cached_results, set_cached_results
+from app.tools.search_provider import google_search
 from app.utils import resilient_request
 from app.config import get_settings
 
@@ -17,7 +18,7 @@ APIFY_BASE = "https://api.apify.com/v2"
 async def search_medium_articles(
     person_name: str, max_results: int = 5
 ) -> list[dict]:
-    """Search Medium — RSS + SerpAPI first, Apify last."""
+    """Search Medium — RSS + search_provider first, Apify last."""
     cache_key = f"medium:{person_name}"
     cached = await get_cached_results(cache_key, "medium")
     if cached is not None:
@@ -25,7 +26,7 @@ async def search_medium_articles(
 
     results = await _medium_rss_search(person_name, max_results)
     if len(results) < max_results:
-        serp_results = await _serpapi_medium(person_name, max_results)
+        serp_results = await _search_provider_medium(person_name, max_results)
         seen_urls = {r["url"].split("?")[0].rstrip("/") for r in results}
         for sr in serp_results:
             canon = sr["url"].split("?")[0].rstrip("/")
@@ -119,31 +120,17 @@ async def _medium_rss_search(person_name: str, max_results: int) -> list[dict]:
     return results
 
 
-async def _serpapi_medium(person_name: str, max_results: int) -> list[dict]:
+async def _search_provider_medium(person_name: str, max_results: int) -> list[dict]:
     """Search Google for Medium articles by or about this person."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:medium.com \"{person_name}\"",
-            "api_key": api_key,
-            "num": max_results + 5,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_search(f'site:medium.com "{person_name}"', num=max_results + 5)
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url or "medium.com" not in url:
                 continue
             if any(skip in url for skip in ["/tag/", "/topic/", "/search?"]):
@@ -159,10 +146,10 @@ async def _serpapi_medium(person_name: str, max_results: int) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI Medium found {len(results)} articles for {person_name}")
+            logger.info(f"Search provider Medium found {len(results)} articles for {person_name}")
         return results[:max_results]
     except Exception as e:
-        logger.warning(f"SerpAPI Medium failed: {e}")
+        logger.warning(f"Search provider Medium failed: {e}")
         return []
 
 

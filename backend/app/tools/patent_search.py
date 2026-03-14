@@ -1,14 +1,11 @@
-"""Google Patents search via SerpAPI."""
+"""Google Patents search via search_provider (Serper.dev or SerpAPI)."""
 
 import logging
 
 from app.cache import get_cached_results, set_cached_results
-from app.utils import resilient_request
-from app.config import get_settings
+from app.tools.search_provider import google_patents
 
 logger = logging.getLogger(__name__)
-
-SERPAPI_URL = "https://serpapi.com/search"
 
 
 async def search_patents(
@@ -20,30 +17,19 @@ async def search_patents(
     if cached is not None:
         return cached
 
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        logger.warning("SERPAPI_API_KEY not set, skipping Patents search")
-        return []
-
-    params = {
-        "engine": "google_patents",
-        "q": inventor_name,
-        "api_key": api_key,
-    }
-
     try:
-        resp = await resilient_request("get", SERPAPI_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_patents(inventor_name, num=max_results + 5)
         organic = data.get("organic_results", [])
         results = []
         for item in organic[:max_results]:
+            if not isinstance(item, dict):
+                continue
             title = item.get("title", "")
-            patent_id = item.get("patent_id", "")
-            link = item.get("patent_link", "") or item.get("pdf", "") or f"https://patents.google.com/patent/{patent_id}"
-            snippet = item.get("snippet", "")
-            filing_date = item.get("filing_date", "")
-            grant_date = item.get("grant_date", "")
+            patent_id = item.get("patent_id", item.get("patentId", ""))
+            link = item.get("patent_link", "") or item.get("link", "") or item.get("pdf", "") or f"https://patents.google.com/patent/{patent_id}"
+            snippet = item.get("snippet", item.get("description", ""))
+            filing_date = item.get("filing_date", item.get("filingDate", ""))
+            grant_date = item.get("grant_date", item.get("grantDate", ""))
             inventor = item.get("inventor", "")
             assignee = item.get("assignee", "")
 

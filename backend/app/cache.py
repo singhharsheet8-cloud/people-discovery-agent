@@ -37,6 +37,12 @@ SOURCE_TTL_MAP = {
     "linkedin": "cache_ttl_linkedin",
     "youtube": "cache_ttl_youtube",
     "blog": "cache_ttl_web",
+    # Image resolver
+    "image_resolver_v4": "cache_ttl_linkedin",
+    # Patent search
+    "patents": "cache_ttl_youtube",
+    # Google News
+    "google_news": "cache_ttl_web",
     # Legacy cache keys retained for existing cached entries
     "youtube_api": "cache_ttl_youtube",
     "github_api": "cache_ttl_linkedin",

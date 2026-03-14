@@ -1,14 +1,11 @@
-"""Google Scholar search via SerpAPI."""
+"""Google Scholar search via search_provider (Serper.dev or SerpAPI)."""
 
 import logging
 
 from app.cache import get_cached_results, set_cached_results
-from app.utils import resilient_request
-from app.config import get_settings
+from app.tools.search_provider import google_scholar
 
 logger = logging.getLogger(__name__)
-
-SERPAPI_URL = "https://serpapi.com/search"
 
 
 async def search_scholar(
@@ -20,28 +17,25 @@ async def search_scholar(
     if cached is not None:
         return cached
 
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        logger.warning("SERPAPI_API_KEY not set, skipping Scholar search")
-        return []
-
-    params = {
-        "engine": "google_scholar",
-        "q": person_name,
-        "api_key": api_key,
-        "num": max_results,
-    }
-
     try:
-        resp = await resilient_request("get", SERPAPI_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_scholar(person_name, num=max_results)
         organic = data.get("organic_results", [])
         results = []
         for item in organic[:max_results]:
+            if not isinstance(item, dict):
+                continue
             title = item.get("title", "")
-            link = item.get("link", "")
-            snippet = item.get("snippet", "")
+            link = item.get("link", item.get("url", ""))
+            snippet = item.get("snippet", item.get("description", ""))
+            pub_info = item.get("publication_info", {})
+            if not isinstance(pub_info, dict):
+                pub_info = {}
+            inline = item.get("inline_links", {})
+            if not isinstance(inline, dict):
+                inline = {}
+            cited_by = inline.get("cited_by", {})
+            if not isinstance(cited_by, dict):
+                cited_by = {}
             results.append(
                 {
                     "title": title,
@@ -50,13 +44,9 @@ async def search_scholar(
                     "source_type": "scholar",
                     "score": 0.9,
                     "structured": {
-                        "citation_count": (
-                            item.get("inline_links", {})
-                            .get("cited_by", {})
-                            .get("total", 0)
-                        ),
-                        "publication_summary": item.get("publication_info", {}).get("summary", ""),
-                        "authors": item.get("publication_info", {}).get("authors", []),
+                        "citation_count": cited_by.get("total", 0),
+                        "publication_summary": pub_info.get("summary", ""),
+                        "authors": pub_info.get("authors", []),
                     },
                 }
             )

@@ -1,9 +1,10 @@
-"""LinkedIn profile and posts scraping — SerpAPI primary, Apify fallback."""
+"""LinkedIn profile and posts scraping — search_provider primary, Apify fallback."""
 
 import json
 import logging
 
 from app.cache import get_cached_results, set_cached_results
+from app.tools.search_provider import google_search
 from app.utils import resilient_request
 from app.config import get_settings
 
@@ -15,12 +16,12 @@ APIFY_BASE = "https://api.apify.com/v2"
 async def scrape_linkedin_profile(
     linkedin_url: str, max_results: int = 1
 ) -> list[dict]:
-    """Scrape a LinkedIn profile — SerpAPI first, Apify fallback."""
+    """Scrape a LinkedIn profile — search_provider first, Apify fallback."""
     cached = await get_cached_results(linkedin_url, "linkedin_profile")
     if cached is not None:
         return cached
 
-    results = await _serpapi_linkedin_profile(linkedin_url)
+    results = await _search_provider_linkedin_profile(linkedin_url)
     if not results:
         results = await _apify_profile(linkedin_url, max_results)
 
@@ -29,32 +30,18 @@ async def scrape_linkedin_profile(
     return results
 
 
-async def _serpapi_linkedin_profile(linkedin_url: str) -> list[dict]:
-    """Use SerpAPI to get Google's cached version of the LinkedIn profile."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
+async def _search_provider_linkedin_profile(linkedin_url: str) -> list[dict]:
+    """Use search_provider to get Google's cached version of the LinkedIn profile."""
     username = linkedin_url.rstrip("/").split("/")[-1]
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:linkedin.com/in/{username}",
-            "api_key": api_key,
-            "num": 5,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_search(f"site:linkedin.com/in/{username}", num=5)
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url or "linkedin.com" not in url:
                 continue
             results.append(
@@ -68,10 +55,10 @@ async def _serpapi_linkedin_profile(linkedin_url: str) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI LinkedIn profile found {len(results)} results for {username}")
+            logger.info(f"Search provider LinkedIn profile found {len(results)} results for {username}")
         return results
     except Exception as e:
-        logger.warning(f"SerpAPI LinkedIn profile failed: {e}")
+        logger.warning(f"Search provider LinkedIn profile failed: {e}")
         return []
 
 
@@ -113,13 +100,13 @@ async def _apify_profile(linkedin_url: str, max_results: int) -> list[dict]:
 async def scrape_linkedin_posts(
     person_name: str, max_posts: int = 20
 ) -> list[dict]:
-    """Scrape LinkedIn posts — SerpAPI first, Apify fallback."""
+    """Scrape LinkedIn posts — search_provider first, Apify fallback."""
     cache_key = f"linkedin_posts:{person_name}"
     cached = await get_cached_results(cache_key, "linkedin_posts")
     if cached is not None:
         return cached
 
-    results = await _serpapi_linkedin_posts(person_name)
+    results = await _search_provider_linkedin_posts(person_name)
     if not results:
         results = await _apify_posts(person_name, max_posts)
 
@@ -128,31 +115,20 @@ async def scrape_linkedin_posts(
     return results
 
 
-async def _serpapi_linkedin_posts(person_name: str) -> list[dict]:
+async def _search_provider_linkedin_posts(person_name: str) -> list[dict]:
     """Search Google for LinkedIn posts/articles by this person."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:linkedin.com/posts OR site:linkedin.com/pulse \"{person_name}\"",
-            "api_key": api_key,
-            "num": 10,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
+        data = await google_search(
+            f'site:linkedin.com/posts OR site:linkedin.com/pulse "{person_name}"',
+            num=10,
         )
-        resp.raise_for_status()
-        data = resp.json()
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url or "linkedin.com" not in url:
                 continue
             results.append(
@@ -166,10 +142,10 @@ async def _serpapi_linkedin_posts(person_name: str) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI LinkedIn posts found {len(results)} for {person_name}")
+            logger.info(f"Search provider LinkedIn posts found {len(results)} for {person_name}")
         return results
     except Exception as e:
-        logger.warning(f"SerpAPI LinkedIn posts failed: {e}")
+        logger.warning(f"Search provider LinkedIn posts failed: {e}")
         return []
 
 
@@ -216,35 +192,21 @@ async def _apify_posts(person_name: str, max_posts: int) -> list[dict]:
 
 
 async def search_linkedin_by_name(person_name: str) -> list[dict]:
-    """Find a person's LinkedIn profile via SerpAPI Google search by name."""
+    """Find a person's LinkedIn profile via search_provider Google search by name."""
     cache_key = f"linkedin_profile_name:{person_name}"
     cached = await get_cached_results(cache_key, "linkedin_profile")
     if cached is not None:
         return cached
 
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:linkedin.com/in/ \"{person_name}\"",
-            "api_key": api_key,
-            "num": 5,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_search(f'site:linkedin.com/in/ "{person_name}"', num=5)
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url or "linkedin.com/in/" not in url:
                 continue
             results.append(
@@ -258,9 +220,9 @@ async def search_linkedin_by_name(person_name: str) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI LinkedIn name search found {len(results)} profiles for {person_name}")
+            logger.info(f"Search provider LinkedIn name search found {len(results)} profiles for {person_name}")
             await set_cached_results(cache_key, "linkedin_profile", results)
         return results
     except Exception as e:
-        logger.warning(f"SerpAPI LinkedIn name search failed for {person_name}: {e}")
+        logger.warning(f"Search provider LinkedIn name search failed for {person_name}: {e}")
         return []

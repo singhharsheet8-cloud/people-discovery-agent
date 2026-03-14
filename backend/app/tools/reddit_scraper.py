@@ -1,8 +1,9 @@
-"""Reddit mention search — Reddit JSON API primary, SerpAPI fallback, Apify last."""
+"""Reddit mention search — Reddit JSON API primary, search_provider fallback, Apify last."""
 
 import logging
 
 from app.cache import get_cached_results, set_cached_results
+from app.tools.search_provider import google_search
 from app.utils import resilient_request
 from app.config import get_settings
 
@@ -16,7 +17,7 @@ USER_AGENT = "PeopleDiscoveryAgent/1.0 (research bot)"
 async def search_reddit_mentions(
     person_name: str, max_results: int = 10
 ) -> list[dict]:
-    """Search Reddit for mentions — Reddit API first, SerpAPI second, Apify last."""
+    """Search Reddit for mentions — Reddit API first, search_provider second, Apify last."""
     cache_key = f"reddit:{person_name}"
     cached = await get_cached_results(cache_key, "reddit")
     if cached is not None:
@@ -24,7 +25,7 @@ async def search_reddit_mentions(
 
     results = await _reddit_json_api(person_name, max_results)
     if not results:
-        results = await _serpapi_reddit(person_name, max_results)
+        results = await _search_provider_reddit(person_name, max_results)
     if not results:
         results = await _apify_reddit(person_name, max_results)
 
@@ -89,31 +90,19 @@ async def _reddit_json_api(person_name: str, max_results: int) -> list[dict]:
         return []
 
 
-async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
+async def _search_provider_reddit(person_name: str, max_results: int) -> list[dict]:
     """Fallback: search Google for Reddit threads mentioning this person."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:reddit.com \"{person_name}\"",
-            "api_key": api_key,
-            "num": max_results + 5,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
+        data = await google_search(
+            f'site:reddit.com "{person_name}"', num=max_results + 5
         )
-        resp.raise_for_status()
-        data = resp.json()
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url or "reddit.com" not in url:
                 continue
             subreddit = ""
@@ -132,10 +121,10 @@ async def _serpapi_reddit(person_name: str, max_results: int) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI Reddit found {len(results)} results for {person_name}")
+            logger.info(f"Search provider Reddit found {len(results)} results for {person_name}")
         return results[:max_results]
     except Exception as e:
-        logger.warning(f"SerpAPI Reddit failed for {person_name}: {e}")
+        logger.warning(f"Search provider Reddit failed for {person_name}: {e}")
         return []
 
 

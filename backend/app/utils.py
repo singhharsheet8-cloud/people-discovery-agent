@@ -1,9 +1,13 @@
 import asyncio
 import logging
 import random
+import ssl
 from functools import wraps
 
+import certifi
 import httpx
+
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +17,9 @@ MODEL_PRICING = {
     "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "gpt-4o": {"input": 2.50, "output": 10.00},
-    # DeepSeek
+    # DeepSeek (direct + OpenRouter)
     "deepseek-chat": {"input": 0.14, "output": 0.28},
+    "deepseek/deepseek-chat-v3-0324": {"input": 0.55, "output": 2.19},
     # Groq — Llama 3
     "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
     "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
@@ -104,7 +109,7 @@ async def resilient_request(
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, verify=_SSL_CTX) as client:
                 resp = await getattr(client, method.lower())(url, **kwargs)
                 if resp.status_code == 429:
                     retry_after = float(resp.headers.get("Retry-After", 2 ** (attempt + 1)))

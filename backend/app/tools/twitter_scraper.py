@@ -1,9 +1,10 @@
-"""Twitter/X profile scraping — SerpAPI primary, Apify fallback."""
+"""Twitter/X profile scraping — search_provider primary, Apify fallback."""
 
 import json
 import logging
 
 from app.cache import get_cached_results, set_cached_results
+from app.tools.search_provider import google_search
 from app.utils import resilient_request
 from app.config import get_settings
 
@@ -13,7 +14,7 @@ APIFY_BASE = "https://api.apify.com/v2"
 
 
 async def scrape_twitter_profile(handle: str) -> list[dict]:
-    """Scrape a Twitter/X profile — SerpAPI first, Apify fallback."""
+    """Scrape a Twitter/X profile — search_provider first, Apify fallback."""
     clean = handle.lstrip("@").strip()
     if not clean:
         return []
@@ -22,7 +23,7 @@ async def scrape_twitter_profile(handle: str) -> list[dict]:
     if cached is not None:
         return cached
 
-    results = await _try_serpapi(clean)
+    results = await _try_search_provider(clean)
     if not results:
         results = await _try_apify(clean)
 
@@ -31,31 +32,17 @@ async def scrape_twitter_profile(handle: str) -> list[dict]:
     return results
 
 
-async def _try_serpapi(handle: str) -> list[dict]:
-    """Use SerpAPI to search Twitter/X for a handle's posts and profile."""
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return []
-
+async def _try_search_provider(handle: str) -> list[dict]:
+    """Use search_provider to search Twitter/X for a handle's posts and profile."""
     try:
-        params = {
-            "engine": "google",
-            "q": f"site:x.com OR site:twitter.com @{handle}",
-            "api_key": api_key,
-            "num": 10,
-        }
-        resp = await resilient_request(
-            "get", "https://serpapi.com/search.json", params=params, timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_search(f"site:x.com OR site:twitter.com @{handle}", num=10)
         organic = data.get("organic_results", [])
 
         results = []
         for item in organic:
-            url = item.get("link", "")
+            url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
-            snippet = item.get("snippet", "")
+            snippet = item.get("snippet", item.get("description", ""))
             if not url:
                 continue
             results.append(
@@ -69,10 +56,10 @@ async def _try_serpapi(handle: str) -> list[dict]:
             )
 
         if results:
-            logger.info(f"SerpAPI Twitter found {len(results)} results for @{handle}")
+            logger.info(f"Search provider Twitter found {len(results)} results for @{handle}")
         return results
     except Exception as e:
-        logger.warning(f"SerpAPI Twitter failed for @{handle}: {e}")
+        logger.warning(f"Search provider Twitter failed for @{handle}: {e}")
         return []
 
 

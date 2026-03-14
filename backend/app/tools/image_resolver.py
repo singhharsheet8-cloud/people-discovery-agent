@@ -47,6 +47,7 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 from app.cache import get_cached_results, set_cached_results
 from app.config import get_settings
+from app.tools.search_provider import google_images, google_search
 from app.utils import resilient_request
 
 # Lazy import to avoid circular imports — loaded only when storage is used
@@ -304,12 +305,9 @@ async def _serpapi_gimg_handle(
 ) -> str | None:
     if not handle:
         return None
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return None
 
     query = f'"{name}" linkedin.com/in/{handle} profile photo'
-    return await _serpapi_gimg_query(query, api_key, require_linkedin=True)
+    return await _gimg_query(query, require_linkedin=True)
 
 
 # ---------------------------------------------------------------------------
@@ -347,29 +345,21 @@ async def _wikipedia_image(name: str) -> str | None:
 async def _serpapi_knowledge_graph(
     name: str, company: str | None
 ) -> str | None:
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return None
-
     query = f"{name} {company}" if company else name
     try:
-        resp = await resilient_request(
-            "get",
-            "https://serpapi.com/search.json",
-            params={"engine": "google", "q": query, "api_key": api_key, "num": 1},
-            timeout=15,
+        data = await google_search(query, num=1)
+        kg = data.get("knowledge_graph", {})
+        if not isinstance(kg, dict):
+            return None
+        img = (
+            kg.get("image")
+            or kg.get("thumbnail")
+            or (kg.get("header_images") or [{}])[0].get("image", "")
         )
-        if resp.status_code == 200:
-            kg = resp.json().get("knowledge_graph", {})
-            img = (
-                kg.get("image")
-                or kg.get("thumbnail")
-                or (kg.get("header_images") or [{}])[0].get("image", "")
-            )
-            if img and isinstance(img, str) and img.startswith("http"):
-                return img
+        if img and isinstance(img, str) and img.startswith("http"):
+            return img
     except Exception as e:
-        logger.debug(f"[image] SerpAPI KG failed for {name!r}: {e}")
+        logger.debug(f"[image] Knowledge Graph failed for {name!r}: {e}")
     return None
 
 
@@ -380,27 +370,20 @@ async def _serpapi_knowledge_graph(
 # ---------------------------------------------------------------------------
 
 async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return None
-
     parts = [f'"{name}"']
     if company:
         parts.append(f'"{company}"')
     parts.append("linkedin profile photo")
     query = " ".join(parts)
-    # For name+company searches, ONLY accept confirmed LinkedIn CDN URLs
-    # to avoid picking up press/news photos for famous people
-    return await _serpapi_gimg_query(query, api_key, require_linkedin=True)
+    return await _gimg_query(query, require_linkedin=True)
 
 
-async def _serpapi_gimg_query(
+async def _gimg_query(
     query: str,
-    api_key: str,
     require_linkedin: bool = False,
 ) -> str | None:
     """
-    Run a Google Images SerpAPI query and return the best confirmed image URL.
+    Run a Google Images query via search_provider and return the best image URL.
 
     Priority within results:
       1. LinkedIn CDN profile photos (media.licdn.com/dms/image/*/profile-displayphoto)
@@ -409,29 +392,15 @@ async def _serpapi_gimg_query(
     SerpAPI-hosted thumbnails (serpapi.com/searches/...) are always skipped.
     """
     try:
-        resp = await resilient_request(
-            "get",
-            "https://serpapi.com/search.json",
-            params={
-                "engine": "google_images",
-                "q": query,
-                "api_key": api_key,
-                "num": 10,
-                "safe": "active",
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return None
+        data = await google_images(query, num=10)
 
         linkedin_hit = None
         fallback_hit = None
 
-        for img in resp.json().get("images_results", []):
+        for img in data.get("images_results", []):
             original = img.get("original", "")
             if not original.startswith("http"):
                 continue
-            # Skip SerpAPI-cached images — they expire
             if "serpapi.com" in original:
                 continue
 
@@ -440,7 +409,7 @@ async def _serpapi_gimg_query(
                 and "profile-displayphoto" in original
             ):
                 linkedin_hit = original
-                break  # best possible result
+                break
 
             if fallback_hit is None and not require_linkedin:
                 fallback_hit = original
@@ -448,7 +417,7 @@ async def _serpapi_gimg_query(
         return linkedin_hit or fallback_hit
 
     except Exception as e:
-        logger.debug(f"[image] SerpAPI Google Images failed ({query[:60]}): {e}")
+        logger.debug(f"[image] Google Images failed ({query[:60]}): {e}")
     return None
 
 
@@ -459,10 +428,6 @@ async def _serpapi_gimg_query(
 async def _serpapi_organic_thumbnail(
     name: str, company: str | None
 ) -> str | None:
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        return None
-
     parts = [f'"{name}"']
     if company:
         parts.append(f'"{company}"')
@@ -470,26 +435,19 @@ async def _serpapi_organic_thumbnail(
     query = " ".join(parts)
 
     try:
-        resp = await resilient_request(
-            "get",
-            "https://serpapi.com/search.json",
-            params={"engine": "google", "q": query, "api_key": api_key, "num": 5},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            for result in resp.json().get("organic_results", []):
-                thumbnail = result.get("thumbnail", "")
-                link = result.get("link", "")
-                # Skip SerpAPI-cached thumbnails — they expire
-                if (
-                    "linkedin.com/in" in link
-                    and thumbnail
-                    and thumbnail.startswith("http")
-                    and "serpapi.com" not in thumbnail
-                ):
-                    return thumbnail
+        data = await google_search(query, num=5)
+        for result in data.get("organic_results", []):
+            thumbnail = result.get("thumbnail", "")
+            link = result.get("link", result.get("url", ""))
+            if (
+                "linkedin.com/in" in link
+                and thumbnail
+                and thumbnail.startswith("http")
+                and "serpapi.com" not in thumbnail
+            ):
+                return thumbnail
     except Exception as e:
-        logger.debug(f"[image] SerpAPI organic failed for {name!r}: {e}")
+        logger.debug(f"[image] organic thumbnail failed for {name!r}: {e}")
     return None
 
 

@@ -16,9 +16,12 @@ class Settings(BaseSettings):
     apify_api_key: str = ""
     firecrawl_api_key: str = ""
     serpapi_api_key: str = ""
+    serper_api_key: str = ""     # Serper.dev — cheaper alternative to SerpAPI
+    search_provider: str = ""    # "serper" to prefer Serper.dev; default = SerpAPI
     sociavault_api_key: str = ""
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
+    openrouter_api_key: str = "" # OpenRouter — access DeepSeek V3.2 etc. from India
 
     # Admin defaults
     admin_email: str = "admin@discovery.local"
@@ -183,13 +186,14 @@ def _is_reasoning_model(model: str) -> bool:
 
 
 def get_synthesis_llm():
-    """Build synthesis LLM — supports Groq/custom endpoint, DeepSeek, Anthropic, or OpenAI.
+    """Build synthesis LLM — supports custom endpoint, OpenRouter, DeepSeek, Anthropic, or OpenAI.
 
     Priority:
-      1. SYNTHESIS_BASE_URL set  → treat as OpenAI-compatible endpoint (Groq OSS, Together, etc.)
-      2. DeepSeek prefix         → DeepSeek API
-      3. Claude prefix           → Anthropic API
-      4. Fallback                → OpenAI
+      1. SYNTHESIS_BASE_URL set  → treat as OpenAI-compatible endpoint (Groq, OpenRouter, etc.)
+      2. OpenRouter + deepseek/  → route via OpenRouter (works from India)
+      3. DeepSeek prefix         → DeepSeek direct API
+      4. Claude prefix           → Anthropic API
+      5. Fallback                → OpenAI
     """
     from langchain_anthropic import ChatAnthropic
     from langchain_openai import ChatOpenAI
@@ -197,13 +201,18 @@ def get_synthesis_llm():
     settings = get_settings()
     model = settings.synthesis_model
 
-    # ── Priority 1: Custom OpenAI-compatible endpoint (Groq, Together, etc.) ──
+    # ── Priority 1: Custom OpenAI-compatible endpoint (Groq, OpenRouter, etc.) ──
     if settings.synthesis_base_url:
         api_key = (
             settings.synthesis_api_key
+            or settings.openrouter_api_key
             or settings.groq_api_key
             or settings.openai_api_key
         )
+        extra_headers = {}
+        if "openrouter" in settings.synthesis_base_url:
+            extra_headers["HTTP-Referer"] = "https://people-discovery-agent.app"
+            extra_headers["X-Title"] = "People Discovery Agent"
         return ChatOpenAI(
             model=model,
             api_key=api_key,
@@ -211,9 +220,25 @@ def get_synthesis_llm():
             temperature=0,
             max_tokens=4096,
             model_kwargs={"response_format": {"type": "json_object"}},
+            default_headers=extra_headers or None,
         )
 
-    # ── Priority 2: DeepSeek ──────────────────────────────────────────────────
+    # ── Priority 2: OpenRouter for deepseek/ or other routed models ──────────
+    if settings.openrouter_api_key and "/" in model:
+        return ChatOpenAI(
+            model=model,
+            api_key=settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            temperature=0,
+            max_tokens=4096,
+            model_kwargs={"response_format": {"type": "json_object"}},
+            default_headers={
+                "HTTP-Referer": "https://people-discovery-agent.app",
+                "X-Title": "People Discovery Agent",
+            },
+        )
+
+    # ── Priority 3: DeepSeek direct ──────────────────────────────────────────
     if model.startswith("deepseek") and settings.deepseek_api_key:
         return ChatOpenAI(
             model=model,
@@ -224,7 +249,7 @@ def get_synthesis_llm():
             model_kwargs={"response_format": {"type": "json_object"}},
         )
 
-    # ── Priority 3: Anthropic Claude ─────────────────────────────────────────
+    # ── Priority 4: Anthropic Claude ─────────────────────────────────────────
     if model.startswith("claude") and settings.anthropic_api_key:
         return ChatAnthropic(
             model=model,
@@ -233,7 +258,7 @@ def get_synthesis_llm():
             max_tokens=4096,
         )
 
-    # ── Priority 4: OpenAI (default) ─────────────────────────────────────────
+    # ── Priority 5: OpenAI (default) ─────────────────────────────────────────
     kwargs: dict = {
         "model": model,
         "api_key": settings.openai_api_key,

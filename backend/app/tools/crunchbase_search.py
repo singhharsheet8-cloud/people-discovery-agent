@@ -1,14 +1,11 @@
-"""Crunchbase search via SerpAPI Google search with site filter."""
+"""Crunchbase search via search_provider (Serper.dev or SerpAPI) with site filter."""
 
 import logging
 
 from app.cache import get_cached_results, set_cached_results
-from app.utils import resilient_request
-from app.config import get_settings
+from app.tools.search_provider import google_search
 
 logger = logging.getLogger(__name__)
-
-SERPAPI_URL = "https://serpapi.com/search"
 
 
 async def search_crunchbase(
@@ -20,28 +17,14 @@ async def search_crunchbase(
     if cached is not None:
         return cached
 
-    api_key = get_settings().serpapi_api_key
-    if not api_key:
-        logger.warning("SERPAPI_API_KEY not set, skipping Crunchbase search")
-        return []
-
-    params = {
-        "engine": "google",
-        "q": f"site:crunchbase.com {query}",
-        "api_key": api_key,
-        "num": max_results,
-    }
-
     try:
-        resp = await resilient_request("get", SERPAPI_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await google_search(f"site:crunchbase.com {query}", num=max_results)
         organic = data.get("organic_results", [])
         results = []
         for item in organic[:max_results]:
             title = item.get("title", "")
-            link = item.get("link", "")
-            snippet = item.get("snippet", "")
+            link = item.get("link", item.get("url", ""))
+            snippet = item.get("snippet", item.get("description", ""))
 
             entry_type = "unknown"
             if "/person/" in link:
