@@ -330,8 +330,9 @@ async def _wikipedia_image(name: str) -> str | None:
             thumbnail = resp.json().get("thumbnail", {})
             img = thumbnail.get("source", "")
             if img:
-                # Upscale Wikipedia thumbnail to 800px for better quality
-                img = re.sub(r"/\d+px-", "/800px-", img)
+                # Request 400px — Wikipedia rate-limits requests for larger sizes
+                # (800px often returns 429). 400px is high quality for a headshot.
+                img = re.sub(r"/\d+px-", "/400px-", img)
             return img or None
     except Exception as e:
         logger.debug(f"[image] Wikipedia failed for {name!r}: {e}")
