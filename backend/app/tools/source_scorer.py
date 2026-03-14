@@ -106,13 +106,15 @@ async def score_sources(
     if not results:
         return []
 
+    target_name = target.get("name", "")
+
     has_content = any(
         (r.get("content") or r.get("snippet") or "").strip()
         for r in results
     )
     if not has_content:
         logger.debug("[scorer] no content in results, using defaults")
-        return _heuristic_scores(results)
+        return _heuristic_scores(results, target_name)
 
     if len(results) <= _BATCH_SIZE:
         return await _score_batch(target, results, offset=0)
@@ -155,11 +157,11 @@ async def _score_batch(
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         raw = json.loads(text)
         scored = raw.get("scores", [])
-        return _merge_with_defaults(results, scored)
+        return _merge_with_defaults(results, scored, target.get("name", ""))
 
     except Exception as exc:
         logger.warning("[scorer] LLM scoring failed for batch offset=%d (%s), using heuristics", offset, exc)
-        return _heuristic_scores(results)
+        return _heuristic_scores(results, target.get("name", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -184,34 +186,50 @@ _PLATFORM_RELIABILITY = {
 }
 
 
-def _heuristic_score(result: dict) -> dict:
+def _heuristic_score(result: dict, target_name: str = "") -> dict:
     stype = result.get("source_type", "web")
-    rel = _PLATFORM_RELIABILITY.get(stype, 0.5)
-    # Relevance heuristic: if the source has a SerpAPI score, use it
-    serp_score = float(result.get("score", 0.5))
-    relevance = min(1.0, serp_score)
-    confidence = round((relevance + rel + 0.5) / 3, 2)
+    reliability = _PLATFORM_RELIABILITY.get(stype, 0.5)
+
+    # Relevance: check if the target name appears in title/snippet
+    title = (result.get("title") or "").lower()
+    snippet = (result.get("content") or result.get("snippet") or "").lower()
+    name_lower = target_name.lower().strip() if target_name else ""
+
+    if name_lower:
+        name_parts = name_lower.split()
+        full_match = name_lower in title or name_lower in snippet
+        partial_match = all(p in title or p in snippet for p in name_parts) if name_parts else False
+
+        if full_match:
+            relevance = 0.6
+        elif partial_match:
+            relevance = 0.4
+        else:
+            relevance = 0.15
+    else:
+        relevance = 0.3
+
+    confidence = round((relevance + reliability + 0.4) / 3, 2)
     return {
         "relevance": round(relevance, 2),
-        "reliability": rel,
-        "corroboration": 0.5,
+        "reliability": reliability,
+        "corroboration": 0.4,
         "confidence": confidence,
         "reason": f"heuristic ({stype})",
     }
 
 
-def _heuristic_scores(results: list[dict]) -> list[dict]:
-    return [_heuristic_score(r) for r in results]
+def _heuristic_scores(results: list[dict], target_name: str = "") -> list[dict]:
+    return [_heuristic_score(r, target_name) for r in results]
 
 
-def _merge_with_defaults(results: list[dict], scored: list[dict]) -> list[dict]:
+def _merge_with_defaults(results: list[dict], scored: list[dict], target_name: str = "") -> list[dict]:
     """Map LLM-returned scores back to the original index, fill gaps with heuristics."""
     by_idx: dict[int, dict] = {s["index"]: s for s in scored if "index" in s}
     out = []
     for i, r in enumerate(results):
         if i in by_idx:
             s = by_idx[i]
-            # Recalculate confidence in case LLM rounded differently
             rel = float(s.get("relevance", 0.5))
             rlb = float(s.get("reliability", 0.5))
             cor = float(s.get("corroboration", 0.5))
@@ -223,5 +241,5 @@ def _merge_with_defaults(results: list[dict], scored: list[dict]) -> list[dict]:
                 "reason": s.get("reason", ""),
             })
         else:
-            out.append(_heuristic_score(r))
+            out.append(_heuristic_score(r, target_name))
     return out

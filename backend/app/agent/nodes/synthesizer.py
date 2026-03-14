@@ -87,12 +87,13 @@ def _build_sources_text(results: list[dict], max_sources: int = 80) -> list[str]
 
     With gpt-4.1-mini (128K context), we can include all sources generously.
     High-value platforms get more content; low-value ones get trimmed.
+    Prioritise by LLM-scored relevance (from source_scorer), not raw search rank.
     """
     prioritised = sorted(
         enumerate(results),
         key=lambda t: (
             0 if t[1].get("source_type") in _HIGH_VALUE_SOURCES else 1,
-            -(t[1].get("score", 0) or 0),
+            -(t[1].get("relevance_score", t[1].get("confidence", 0)) or 0),
         ),
     )
 
@@ -188,7 +189,7 @@ IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, 
         logger.error(f"Raw response (first 500 chars): {response.content[:500]}")
         profile = _build_fallback_profile(state, analysis, enrichment)
 
-    profile["confidence_score"] = state.get("confidence_score", 0)
+    profile["confidence_score"] = min(state.get("confidence_score", 0), 0.99)
 
     if "reputation_score" not in profile:
         profile["reputation_score"] = enrichment.get("source_diversity", 0.5)

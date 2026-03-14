@@ -379,9 +379,9 @@ async def _run_discovery(job_id: str, input_data: dict):
                 person.company = _merge_scalar(person.company, profile.get("company"))
                 person.location = _merge_scalar(person.location, profile.get("location"))
                 person.bio = _merge_scalar(person.bio, profile.get("bio"))
-                person.confidence_score = max(
-                    person.confidence_score,
-                    profile.get("confidence_score", result.get("confidence_score", 0)),
+                new_conf = profile.get("confidence_score", result.get("confidence_score", 0))
+                person.confidence_score = round(
+                    (person.confidence_score + new_conf) / 2, 3
                 )
                 if profile.get("image_url") and not person.image_url:
                     person.image_url = profile["image_url"]
@@ -432,10 +432,14 @@ async def _run_discovery(job_id: str, input_data: dict):
                 )).all()
                 existing_keys = {(row[0] or "", row[1] or "") for row in existing_sources}
 
+            _SOURCE_RELEVANCE_FLOOR = 0.25
             new_keys: set[tuple[str, str]] = set()
             for source in profile.get("sources", []):
                 url = source.get("url", "")
                 stype = source.get("platform", "web")
+                rel = source.get("relevance_score", source.get("confidence", 0.5))
+                if float(rel) < _SOURCE_RELEVANCE_FLOOR:
+                    continue
                 key = (url, stype)
                 if key in existing_keys or key in new_keys:
                     continue
@@ -447,7 +451,7 @@ async def _run_discovery(job_id: str, input_data: dict):
                     url=url,
                     title=source.get("title", ""),
                     raw_content=source.get("snippet", ""),
-                    relevance_score=source.get("relevance_score", source.get("confidence", 0.5)),
+                    relevance_score=float(rel),
                     source_reliability=source.get("confidence", _get_source_reliability(stype)),
                 )
                 session.add(ps)
@@ -456,12 +460,13 @@ async def _run_discovery(job_id: str, input_data: dict):
                 if isinstance(sr, dict):
                     url = sr.get("url", "")
                     stype = sr.get("source_type", "web")
+                    rel_score = float(sr.get("relevance_score", sr.get("score", 0.5)))
+                    if rel_score < _SOURCE_RELEVANCE_FLOOR:
+                        continue
                     key = (url, stype)
                     if key in existing_keys or key in new_keys:
                         continue
                     new_keys.add(key)
-                    # Prefer LLM-scored values (set by analyzer.py) over static heuristics
-                    rel_score = sr.get("relevance_score", sr.get("score", 0.5))
                     src_rel = sr.get("source_reliability", _get_source_reliability(stype))
                     ps = PersonSource(
                         person_id=person.id,
@@ -471,7 +476,7 @@ async def _run_discovery(job_id: str, input_data: dict):
                         title=sr.get("title", ""),
                         raw_content=sr.get("content", "")[:5000],
                         structured_data=json.dumps(sr.get("structured")) if sr.get("structured") else None,
-                        relevance_score=float(rel_score),
+                        relevance_score=rel_score,
                         source_reliability=float(src_rel),
                         scorer_reason=(sr.get("scorer_reason") or "")[:200] or None,
                     )
@@ -492,7 +497,11 @@ async def _run_discovery(job_id: str, input_data: dict):
                 job_row.total_cost = result.get("cost_tracker", {}).get("total", 0.0)
                 job_row.cost_breakdown = json.dumps(result.get("cost_tracker", {}))
                 job_row.latency_ms = elapsed_ms
-                job_row.sources_hit = len(result.get("search_results", []))
+                all_sr = result.get("search_results", [])
+                job_row.sources_hit = sum(
+                    1 for s in all_sr
+                    if isinstance(s, dict) and float(s.get("relevance_score", s.get("confidence", 0))) >= _SOURCE_RELEVANCE_FLOOR
+                )
                 job_row.completed_at = datetime.now(timezone.utc)
 
             await session.commit()

@@ -123,26 +123,47 @@ Prefer higher-confidence sources when resolving conflicts."""
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
     best = people[best_idx] if best_idx >= 0 and people else {}
 
-    # Blend LLM self-confidence with average scored-source confidence
+    # Only count sources whose relevance >= 0.3 as "relevant"
+    RELEVANCE_THRESHOLD = 0.3
+    relevant_scores = [s for s in source_scores if s.get("relevance", 0) >= RELEVANCE_THRESHOLD]
+    irrelevant_count = len(source_scores) - len(relevant_scores)
+
     llm_conf = float(best.get("confidence", 0.5))
-    if source_scores:
-        avg_src_conf = sum(s["confidence"] for s in source_scores) / len(source_scores)
+    if relevant_scores:
+        avg_src_conf = sum(s["confidence"] for s in relevant_scores) / len(relevant_scores)
         confidence_score = round((llm_conf * 0.6 + avg_src_conf * 0.4), 3)
     else:
-        confidence_score = llm_conf
+        confidence_score = llm_conf * 0.5  # penalise if no relevant sources
+
+    # Penalise if a large fraction of sources are irrelevant (noisy search)
+    if source_scores:
+        noise_ratio = irrelevant_count / len(source_scores)
+        if noise_ratio > 0.4:
+            confidence_score = round(confidence_score * (1 - noise_ratio * 0.3), 3)
+
+    confidence_score = min(confidence_score, 0.99)
+
+    # Filter scored_results: drop sources below threshold
+    filtered_results = []
+    for r in scored_results:
+        if r.get("relevance_score", r.get("confidence", 0.5)) >= RELEVANCE_THRESHOLD:
+            filtered_results.append(r)
 
     logger.info(
-        "Analysis: %d matches, %d ambiguities, llm_conf=%.3f, src_avg=%.3f → final=%.3f",
+        "Analysis: %d matches, %d ambiguities, llm_conf=%.3f, "
+        "relevant_src=%d/%d, src_avg=%.3f → final=%.3f",
         len(people),
         len(analysis.get("ambiguities", [])),
         llm_conf,
-        sum(s["confidence"] for s in source_scores) / len(source_scores) if source_scores else 0,
+        len(relevant_scores),
+        len(source_scores),
+        sum(s["confidence"] for s in relevant_scores) / len(relevant_scores) if relevant_scores else 0,
         confidence_score,
     )
 
     return {
         "analyzed_results": analysis,
-        "search_results": scored_results,   # propagate enriched results
+        "search_results": filtered_results,
         "confidence_score": confidence_score,
         "cost_tracker": cost_tracker,
         "status": "analysis_complete",
