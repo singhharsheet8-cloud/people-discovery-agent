@@ -36,9 +36,14 @@ import asyncio
 import io
 import logging
 import re
+import ssl
 import urllib.parse
 
+import certifi
 import httpx
+
+# Use certifi CA bundle so Python can verify TLS on all platforms
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 from app.cache import get_cached_results, set_cached_results
 from app.config import get_settings
@@ -168,7 +173,12 @@ async def _validate_image(url: str, timeout: float = 5.0) -> tuple[bool, str]:
         return False, "bad url"
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            verify=_SSL_CONTEXT,
+            headers={"User-Agent": "PeopleDiscoveryAgent/2.0"},
+        ) as c:
             # First do a HEAD to check status + content-type cheaply
             try:
                 r = await c.head(url)
