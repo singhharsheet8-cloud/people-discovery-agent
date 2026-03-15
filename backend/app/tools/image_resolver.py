@@ -589,19 +589,21 @@ async def _gimg_query(
             if "serpapi.com" in original:
                 continue
 
-            # Identity check: verify result title/source mentions the target
-            if name_parts:
-                img_title = (img.get("title") or img.get("source") or "").lower()
-                if not any(p in img_title for p in name_parts):
-                    logger.debug(f"[image] skipping — title doesn't match target: {img_title[:60]}")
-                    continue
-
+            # LinkedIn CDN URLs — check profile vs feed, no name-check needed
+            # (profile-displayphoto URLs are inherently identity-safe)
             if original.startswith(_LICDN_PREFIX):
                 if _is_linkedin_profile_photo(original):
                     linkedin_profile_hit = original
                     break
                 else:
                     logger.debug(f"[image] rejecting LinkedIn non-profile URL: {original[:80]}")
+                    continue
+
+            # Non-LinkedIn: require name match in title to avoid wrong person
+            if name_parts:
+                img_title = (img.get("title") or img.get("source") or "").lower()
+                if not any(p in img_title for p in name_parts):
+                    logger.debug(f"[image] skipping — title doesn't match target: {img_title[:60]}")
                     continue
 
             if fallback_hit is None and not require_linkedin:

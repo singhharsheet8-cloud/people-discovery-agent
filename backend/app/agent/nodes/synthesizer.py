@@ -22,13 +22,16 @@ INSTRUCTIONS:
 
 BIO INSTRUCTIONS — THIS IS THE MOST IMPORTANT FIELD:
 Write a comprehensive 400-600 word profile covering ALL of the following sections:
-- **Background & Early Career**: Origins, education, early career steps
+- **Background & Early Career**: Origins, education, early career steps. Include ALL previous companies and roles from the sources.
 - **Current Role & Responsibilities**: What they do now, their scope of influence
 - **Key Achievements**: Major milestones, transformations, products launched, deals closed
 - **Leadership & Philosophy**: Management style, public statements, cultural impact
 - **Industry Impact**: How they've shaped their industry, thought leadership
 - **Recent Activity**: Latest news, initiatives, public appearances (from 2024-2026)
 - **Personal**: Any known personal details — books authored, philanthropy, hobbies, family (only if publicly available)
+
+CAREER TIMELINE INSTRUCTIONS:
+Include EVERY past and current role mentioned in the sources. If the sources mention the person worked at Company X in any capacity, include it. Include education entries. Each entry must be unique (no duplicates). Order chronologically where dates are known.
 
 Write in third person, authoritative tone. Use specific numbers, dates, and facts from the sources.
 Do NOT use bullet points in the bio — write flowing paragraphs.
@@ -45,7 +48,7 @@ Respond with valid JSON matching this schema:
   "education": ["Degree in Field, University (Year if known)"],
   "expertise": ["Specific domain expertise areas (8-12 items)"],
   "notable_work": ["Significant achievements, publications, projects, or companies (8-12 items with context)"],
-  "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],  // NO DUPLICATES — each role/education appears EXACTLY ONCE
+  "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],  // EVERY role and education — include ALL past companies and positions mentioned in sources. NO DUPLICATES.
   "reputation_score": 0.0-1.0,
   "social_links": {"linkedin": "url", "twitter": "url", "github": "url", "website": "url"},
   "sources": [
