@@ -229,26 +229,76 @@ async def batch_discover(request: BatchDiscoverRequest, _auth=Depends(require_ap
 
 
 def _normalize_name(name: str) -> str:
-    """Normalize a person name for matching: lowercase, strip whitespace/punctuation."""
+    """Normalize a person name for matching: lowercase, strip punctuation/diacritics."""
     import re
+    # Replace hyphens/en-dashes/special chars with space, then keep only letters+spaces
+    name = name.replace("‑", " ").replace("-", " ").replace(".", " ")
     return re.sub(r"[^a-z\s]", "", name.lower()).strip()
 
 
+# Known legal/birth name → common name aliases.
+# These are full-name pairs where the person is canonically known by a different name.
+_NAME_ALIASES: list[tuple[set[str], set[str]]] = [
+    # (set of words in form A, set of words in form B)
+    ({"pichai", "sundararajan"},    {"sundar", "pichai"}),
+    ({"jen", "hsun", "huang"},      {"jensen", "huang"}),
+    ({"elon", "reeve", "musk"},     {"elon", "musk"}),
+    ({"satya", "narayana", "nadella"}, {"satya", "nadella"}),
+    ({"timothy", "donald", "cook"}, {"tim", "cook"}),
+    ({"sundar", "pichai"},          {"pichai", "sundararajan"}),
+]
+
+
 def _names_match(a: str, b: str) -> bool:
-    """Check if two names refer to the same person (case-insensitive, order-insensitive)."""
+    """
+    Check if two names refer to the same person.
+
+    Handles:
+    - Exact match (case-insensitive)
+    - Middle name present in one but not the other: "Elon Musk" == "Elon Reeve Musk"
+    - Known aliases: "Pichai Sundararajan" == "Sundar Pichai", "Jen-Hsun" == "Jensen"
+    - Word-set match (order-insensitive)
+    """
     na, nb = _normalize_name(a), _normalize_name(b)
     if not na or not nb:
         return False
+
+    # Exact full-name match
     if na == nb:
         return True
-    parts_a, parts_b = set(na.split()), set(nb.split())
-    if len(parts_a) >= 2 and len(parts_b) >= 2:
-        return parts_a == parts_b
+
+    parts_a = set(na.split())
+    parts_b = set(nb.split())
+
+    # Exact word-set match (handles reordering)
+    if parts_a == parts_b:
+        return True
+
+    # Known alias pairs
+    for alias_a, alias_b in _NAME_ALIASES:
+        if (parts_a >= alias_a and parts_b >= alias_b) or \
+           (parts_b >= alias_a and parts_a >= alias_b):
+            return True
+
+    # First + last name match (ignores middle names)
+    # "Elon Reeve Musk" → first=elon, last=musk
+    # "Elon Musk"       → first=elon, last=musk  → MATCH
+    words_a = na.split()
+    words_b = nb.split()
+    if len(words_a) >= 2 and len(words_b) >= 2:
+        # first name matches AND last name matches
+        if words_a[0] == words_b[0] and words_a[-1] == words_b[-1]:
+            return True
+        # last name matches AND first initial matches (e.g. "S Nadella" == "Satya Nadella")
+        if words_a[-1] == words_b[-1]:
+            if words_a[0][0] == words_b[0][0] and (len(words_a[0]) == 1 or len(words_b[0]) == 1):
+                return True
+
     return False
 
 
 def _companies_match(a: str | None, b: str | None) -> bool:
-    """Check if two company names match (case-insensitive, ignoring common suffixes)."""
+    """Check if two company names refer to the same company."""
     if not a and not b:
         return True
     if not a or not b:
@@ -256,9 +306,19 @@ def _companies_match(a: str | None, b: str | None) -> bool:
     import re
     def _clean(c: str) -> str:
         c = c.lower().strip()
-        c = re.sub(r"\b(inc|corp|corporation|ltd|llc|co|company|group|holdings)\b\.?", "", c)
+        # Remove legal suffixes
+        c = re.sub(r"\b(inc|corp|corporation|ltd|llc|co|company|group|holdings|pvt|private|limited|ag|gmbh|sa|nv)\b\.?", "", c)
+        # Remove punctuation
+        c = re.sub(r"[^\w\s]", " ", c)
         return re.sub(r"\s+", " ", c).strip()
-    return _clean(a) == _clean(b)
+
+    ca, cb = _clean(a), _clean(b)
+    if ca == cb:
+        return True
+    # One is a substring of the other (handles "Google" vs "Google LLC and Alphabet Inc.")
+    if ca and cb and (ca in cb or cb in ca):
+        return True
+    return False
 
 
 async def _find_existing_person(session: AsyncSession, name: str, company: str | None) -> Person | None:
