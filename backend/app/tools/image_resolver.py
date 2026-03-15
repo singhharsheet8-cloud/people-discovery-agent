@@ -67,7 +67,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v5"  # bumped: now rejects feedshare/post LinkedIn URLs
+_CACHE_TOOL = "image_resolver_v6"  # bumped: stronger identity disambiguation
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -533,17 +533,27 @@ async def _serpapi_knowledge_graph(
 # ---------------------------------------------------------------------------
 
 async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
-    # Two queries: one targeting profile-displayphoto specifically, one broader
     queries = []
     if company:
         queries.append(f'"{name}" "{company}" site:linkedin.com profile-displayphoto')
         queries.append(f'"{name}" "{company}" linkedin profile photo')
+        queries.append(f'"{name}" "{company}" headshot')
     else:
         queries.append(f'"{name}" site:linkedin.com profile-displayphoto')
         queries.append(f'"{name}" linkedin profile photo')
 
     for query in queries:
-        result = await _gimg_query(query, require_linkedin=True)
+        result = await _gimg_query(query, target_name=name, require_linkedin=True)
+        if result:
+            return result
+
+    # Broader fallback: accept non-LinkedIn images if name+company is specific
+    if company:
+        result = await _gimg_query(
+            f'"{name}" "{company}" headshot OR portrait',
+            target_name=name,
+            require_linkedin=False,
+        )
         if result:
             return result
     return None
@@ -551,23 +561,23 @@ async def _serpapi_gimg_name(name: str, company: str | None) -> str | None:
 
 async def _gimg_query(
     query: str,
+    target_name: str = "",
     require_linkedin: bool = True,
 ) -> str | None:
     """
     Run a Google Images query and return the best image URL.
 
-    Identity-safe rules (in priority order):
+    Identity-safe rules:
       1. LinkedIn CDN profile-displayphoto URL → accepted (identity-safe headshot)
       2. LinkedIn CDN feedshare/background/post URL → REJECTED (shows wrong person)
       3. SerpAPI-hosted URL → REJECTED (expires, not stable)
-      4. Any other URL → only accepted if require_linkedin=False
-
-    This prevents the core bug where Google Images returns a post image
-    (feedshare-shrink_800) that shows whoever was in the post, not the
-    profile owner.
+      4. Image whose page title mentions a DIFFERENT person → REJECTED
+      5. Any other URL → only accepted if require_linkedin=False
     """
     try:
         data = await google_images(query, num=10)
+
+        name_parts = [p.lower() for p in target_name.split()] if target_name else []
 
         linkedin_profile_hit = None
         fallback_hit = None
@@ -579,13 +589,18 @@ async def _gimg_query(
             if "serpapi.com" in original:
                 continue
 
+            # Identity check: verify result title/source mentions the target
+            if name_parts:
+                img_title = (img.get("title") or img.get("source") or "").lower()
+                if not any(p in img_title for p in name_parts):
+                    logger.debug(f"[image] skipping — title doesn't match target: {img_title[:60]}")
+                    continue
+
             if original.startswith(_LICDN_PREFIX):
-                # LinkedIn URL — must be a profile photo, not a post/feed image
                 if _is_linkedin_profile_photo(original):
                     linkedin_profile_hit = original
                     break
                 else:
-                    # feedshare / background / post image → identity-unsafe, skip
                     logger.debug(f"[image] rejecting LinkedIn non-profile URL: {original[:80]}")
                     continue
 

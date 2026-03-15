@@ -67,23 +67,15 @@ def _extract_career_timeline(analysis: dict, results: list[dict]) -> list[dict]:
     for edu in best.get("education", []):
         timeline.append({"type": "education", "description": edu, "order": 0})
 
+    _CAREER_KW = (
+        "founded", "co-founded", "joined", "worked at",
+        "ceo", "cto", "vp", "svp", "evp",
+        "director", "head of", "manager", "lead",
+        "president", "partner", "advisor", "board",
+    )
     for fact in best.get("key_facts", []):
         lower = fact.lower()
-        if any(
-            kw in lower
-            for kw in (
-                "founded",
-                "co-founded",
-                "joined",
-                "worked at",
-                "ceo",
-                "cto",
-                "vp",
-                "director",
-                "head of",
-                "manager",
-            )
-        ):
+        if any(kw in lower for kw in _CAREER_KW):
             timeline.append({"type": "role", "description": fact, "order": 1})
 
     for r in results:
@@ -104,7 +96,28 @@ def _extract_career_timeline(analysis: dict, results: list[dict]) -> list[dict]:
                         }
                         timeline.append(entry)
 
-    return timeline
+    return _deduplicate_timeline(timeline)
+
+
+def _deduplicate_timeline(timeline: list[dict]) -> list[dict]:
+    """Remove duplicate timeline entries by normalising title+company."""
+    seen: set[str] = set()
+    deduped = []
+    for entry in timeline:
+        title = (entry.get("title") or entry.get("description") or "").lower().strip()
+        company = (entry.get("company") or "").lower().strip()
+        key = f"{entry.get('type','role')}|{title}|{company}"
+        # Also check substring containment for description-only entries
+        is_dup = key in seen
+        if not is_dup:
+            for s in seen:
+                if title and title in s:
+                    is_dup = True
+                    break
+        if not is_dup:
+            seen.add(key)
+            deduped.append(entry)
+    return deduped
 
 
 def _deduplicate_facts(analysis: dict) -> list[str]:

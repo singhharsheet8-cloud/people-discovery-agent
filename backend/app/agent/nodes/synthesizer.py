@@ -45,7 +45,7 @@ Respond with valid JSON matching this schema:
   "education": ["Degree in Field, University (Year if known)"],
   "expertise": ["Specific domain expertise areas (8-12 items)"],
   "notable_work": ["Significant achievements, publications, projects, or companies (8-12 items with context)"],
-  "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],
+  "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],  // NO DUPLICATES — each role/education appears EXACTLY ONCE
   "reputation_score": 0.0-1.0,
   "social_links": {"linkedin": "url", "twitter": "url", "github": "url", "website": "url"},
   "sources": [
@@ -197,6 +197,13 @@ IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, 
     if "career_timeline" not in profile and timeline:
         profile["career_timeline"] = timeline
 
+    # Deduplicate career_timeline and key_facts (LLMs sometimes generate duplicates)
+    if profile.get("career_timeline"):
+        profile["career_timeline"] = _deduplicate_career_timeline(profile["career_timeline"])
+
+    if profile.get("key_facts"):
+        profile["key_facts"] = _deduplicate_list(profile["key_facts"])
+
     logger.info(f"Synthesized profile for: {profile.get('name', 'Unknown')} (bio: {len(profile.get('bio',''))} chars)")
 
     total = sum(u.get("cost", 0) for u in cost_tracker.values() if isinstance(u, dict))
@@ -229,3 +236,41 @@ def _build_fallback_profile(state: AgentState, analysis: dict, enrichment: dict)
         "social_links": best.get("social_links", {}),
         "sources": [],
     }
+
+
+def _deduplicate_list(items: list[str]) -> list[str]:
+    """Remove near-duplicate strings from a list."""
+    seen: set[str] = set()
+    deduped = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        normalised = item.strip().lower()
+        # Check exact match and substring containment
+        is_dup = normalised in seen
+        if not is_dup:
+            for s in seen:
+                if normalised in s or s in normalised:
+                    is_dup = True
+                    break
+        if not is_dup:
+            seen.add(normalised)
+            deduped.append(item)
+    return deduped
+
+
+def _deduplicate_career_timeline(timeline: list[dict]) -> list[dict]:
+    """Remove duplicate timeline entries produced by the LLM."""
+    seen: set[str] = set()
+    deduped = []
+    for entry in timeline:
+        if not isinstance(entry, dict):
+            continue
+        title = (entry.get("title") or "").lower().strip()
+        company = (entry.get("company") or "").lower().strip()
+        etype = entry.get("type", "role")
+        key = f"{etype}|{title}|{company}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(entry)
+    return deduped
