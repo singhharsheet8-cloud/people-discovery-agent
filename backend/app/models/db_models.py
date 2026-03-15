@@ -1,11 +1,66 @@
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import String, Float, Text, DateTime, Integer, Index, ForeignKey
+from sqlalchemy import String, Float, Text, DateTime, Integer, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 from app.db import Base
+
+
+# ── Known legal/birth name → canonical name mapping ──────────────────────────
+# Used when computing name_key to collapse aliases to one canonical form.
+_CANONICAL_NAMES: dict[str, str] = {
+    "pichai sundararajan": "sundar pichai",
+    "sundararajan pichai": "sundar pichai",
+    "jen hsun huang":      "jensen huang",
+    "jenhsun huang":       "jensen huang",
+    "elon reeve musk":     "elon musk",
+    "satya narayana nadella": "satya nadella",
+    "timothy donald cook": "tim cook",
+    "tim donald cook":     "tim cook",
+}
+
+
+def compute_name_key(name: str) -> str:
+    """
+    Produce a stable, normalised key for a person's name.
+
+    Rules applied in order:
+      1. Lowercase
+      2. Replace hyphens / en-dashes with space
+      3. Strip punctuation and accents (keep only a-z and spaces)
+      4. Collapse whitespace
+      5. Map known aliases to their canonical form
+      6. Sort words alphabetically so "pichai sundar" == "sundar pichai"
+      7. Take only first + last word (drop middle names) when ≥ 3 words
+
+    The resulting key is stored in the DB and used for unique enforcement.
+    """
+    if not name:
+        return ""
+    s = name.lower()
+    s = s.replace("‑", " ").replace("-", " ").replace(".", " ")
+    s = re.sub(r"[^a-z\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # Apply alias mapping (full-name lookup first)
+    if s in _CANONICAL_NAMES:
+        s = _CANONICAL_NAMES[s]
+
+    words = s.split()
+    if not words:
+        return ""
+
+    # Drop middle names: keep first + last only when 3+ words
+    if len(words) >= 3:
+        words = [words[0], words[-1]]
+
+    # Sort alphabetically so word order doesn't matter
+    words.sort()
+    return " ".join(words)
 
 
 def _utcnow() -> datetime:
@@ -14,9 +69,18 @@ def _utcnow() -> datetime:
 
 class Person(Base):
     __tablename__ = "persons"
+    __table_args__ = (
+        # One row per canonical name. Enforced at the DB level by a UNIQUE
+        # constraint AND a BEFORE INSERT/UPDATE trigger that calls
+        # compute_name_key().  The Python model also sets it via __init__
+        # so in-memory objects are always consistent.
+        UniqueConstraint("name_key", name="uq_persons_name_key"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), index=True)
+    # Canonical dedup key — auto-set by DB trigger; also set in Python __init__.
+    name_key: Mapped[str] = mapped_column(String(255), index=True, nullable=True)
     current_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -30,10 +94,19 @@ class Person(Base):
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
     reputation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 1536-dim vector from text-embedding-3-small; null until first embedding run
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="discovered")
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Ensure name_key is always consistent with name at construction time.
+        # The DB trigger handles it for raw SQL; this handles SQLAlchemy ORM paths.
+        if self.name and not self.name_key:
+            self.name_key = compute_name_key(self.name)
 
     _json_fields = ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline")
 

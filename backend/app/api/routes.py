@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session_factory
-from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion, AdminUser
+from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion, AdminUser, compute_name_key
 from app.cache import cleanup_expired_cache
 from app.auth import require_admin, require_api, require_viewer
 from passlib.hash import bcrypt
@@ -228,115 +228,24 @@ async def batch_discover(request: BatchDiscoverRequest, _auth=Depends(require_ap
     return {"jobs": jobs, "total": len(jobs)}
 
 
-def _normalize_name(name: str) -> str:
-    """Normalize a person name for matching: lowercase, strip punctuation/diacritics."""
-    import re
-    # Replace hyphens/en-dashes/special chars with space, then keep only letters+spaces
-    name = name.replace("‑", " ").replace("-", " ").replace(".", " ")
-    return re.sub(r"[^a-z\s]", "", name.lower()).strip()
-
-
-# Known legal/birth name → common name aliases.
-# These are full-name pairs where the person is canonically known by a different name.
-_NAME_ALIASES: list[tuple[set[str], set[str]]] = [
-    # (set of words in form A, set of words in form B)
-    ({"pichai", "sundararajan"},    {"sundar", "pichai"}),
-    ({"jen", "hsun", "huang"},      {"jensen", "huang"}),
-    ({"elon", "reeve", "musk"},     {"elon", "musk"}),
-    ({"satya", "narayana", "nadella"}, {"satya", "nadella"}),
-    ({"timothy", "donald", "cook"}, {"tim", "cook"}),
-    ({"sundar", "pichai"},          {"pichai", "sundararajan"}),
-]
-
-
-def _names_match(a: str, b: str) -> bool:
-    """
-    Check if two names refer to the same person.
-
-    Handles:
-    - Exact match (case-insensitive)
-    - Middle name present in one but not the other: "Elon Musk" == "Elon Reeve Musk"
-    - Known aliases: "Pichai Sundararajan" == "Sundar Pichai", "Jen-Hsun" == "Jensen"
-    - Word-set match (order-insensitive)
-    """
-    na, nb = _normalize_name(a), _normalize_name(b)
-    if not na or not nb:
-        return False
-
-    # Exact full-name match
-    if na == nb:
-        return True
-
-    parts_a = set(na.split())
-    parts_b = set(nb.split())
-
-    # Exact word-set match (handles reordering)
-    if parts_a == parts_b:
-        return True
-
-    # Known alias pairs
-    for alias_a, alias_b in _NAME_ALIASES:
-        if (parts_a >= alias_a and parts_b >= alias_b) or \
-           (parts_b >= alias_a and parts_a >= alias_b):
-            return True
-
-    # First + last name match (ignores middle names)
-    # "Elon Reeve Musk" → first=elon, last=musk
-    # "Elon Musk"       → first=elon, last=musk  → MATCH
-    words_a = na.split()
-    words_b = nb.split()
-    if len(words_a) >= 2 and len(words_b) >= 2:
-        # first name matches AND last name matches
-        if words_a[0] == words_b[0] and words_a[-1] == words_b[-1]:
-            return True
-        # last name matches AND first initial matches (e.g. "S Nadella" == "Satya Nadella")
-        if words_a[-1] == words_b[-1]:
-            if words_a[0][0] == words_b[0][0] and (len(words_a[0]) == 1 or len(words_b[0]) == 1):
-                return True
-
-    return False
-
-
-def _companies_match(a: str | None, b: str | None) -> bool:
-    """Check if two company names refer to the same company."""
-    if not a and not b:
-        return True
-    if not a or not b:
-        return False
-    import re
-    def _clean(c: str) -> str:
-        c = c.lower().strip()
-        # Remove legal suffixes
-        c = re.sub(r"\b(inc|corp|corporation|ltd|llc|co|company|group|holdings|pvt|private|limited|ag|gmbh|sa|nv)\b\.?", "", c)
-        # Remove punctuation
-        c = re.sub(r"[^\w\s]", " ", c)
-        return re.sub(r"\s+", " ", c).strip()
-
-    ca, cb = _clean(a), _clean(b)
-    if ca == cb:
-        return True
-    # One is a substring of the other (handles "Google" vs "Google LLC and Alphabet Inc.")
-    if ca and cb and (ca in cb or cb in ca):
-        return True
-    return False
-
-
 async def _find_existing_person(session: AsyncSession, name: str, company: str | None) -> Person | None:
-    """Find an existing person matching by name + company."""
-    candidates = (await session.execute(
-        select(Person).where(func.lower(Person.name) == name.lower().strip())
-    )).scalars().all()
-    if candidates:
-        for c in candidates:
-            if _companies_match(c.company, company):
-                return c
-        return candidates[0] if len(candidates) == 1 else None
+    """
+    Return an existing Person whose canonical name_key matches the incoming name.
 
-    all_persons = (await session.execute(select(Person))).scalars().all()
-    for p in all_persons:
-        if _names_match(p.name, name) and _companies_match(p.company, company):
-            return p
-    return None
+    This is the single source of truth for duplicate detection. The name_key is
+    computed by compute_name_key() (aliases collapsed, middle names dropped, words
+    sorted) and enforced at the DB level by a UNIQUE constraint + trigger, so even
+    direct SQL writes cannot create duplicates.
+
+    We do a single indexed lookup on name_key — O(1), no full-table scans.
+    """
+    key = compute_name_key(name)
+    if not key:
+        return None
+    row = (await session.execute(
+        select(Person).where(Person.name_key == key)
+    )).scalar_one_or_none()
+    return row
 
 
 def _merge_scalar(old_val: str | None, new_val: str | None) -> str | None:
@@ -579,6 +488,10 @@ async def _run_discovery(job_id: str, input_data: dict):
                 f"(v{person.version}, {len(new_keys)} new sources, {elapsed_ms:.0f}ms)"
             )
 
+            # Generate and persist semantic embedding (non-blocking; errors are logged)
+            await update_person_embedding(session, person)
+            await session.commit()
+
         # Post-save image fill — if the agent didn't find an image, run the
         # resolver now with the fully known LinkedIn handle so Tier 2/3
         # (SerpAPI Google Images) can fill it in.
@@ -713,6 +626,35 @@ async def get_job(job_id: str, _auth=Depends(require_api)):
 
 
 # --- Persons CRUD ---
+
+
+@router.get("/persons/semantic-search")
+async def semantic_search_persons(
+    q: str = Query(..., min_length=2, max_length=500, description="Natural language query"),
+    limit: int = Query(10, ge=1, le=50),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="Minimum cosine similarity (0–1)"),
+    _auth=Depends(require_api),
+):
+    """
+    Semantic search over persons using vector similarity.
+
+    Returns persons whose profiles are semantically closest to *q*.
+    Each result includes a ``similarity`` score (0–1, higher is better).
+
+    Requires:
+    - pgvector extension enabled on the database.
+    - Persons must have embeddings generated (they are created automatically
+      after each discovery run; use the backfill script for existing records).
+    """
+    from app.embeddings import semantic_search
+
+    factory = get_session_factory()
+    async with factory() as session:
+        results = await semantic_search(
+            session, query=q, limit=limit, min_similarity=min_similarity
+        )
+    return {"results": results, "count": len(results), "query": q}
+
 
 @router.get("/persons")
 async def list_persons(
