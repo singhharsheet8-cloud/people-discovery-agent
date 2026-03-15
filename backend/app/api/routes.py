@@ -289,7 +289,7 @@ def _merge_scalar(old_val: str | None, new_val: str | None) -> str | None:
 
 
 def _merge_list_field(old_list: list | None, new_list: list | None) -> list:
-    """Union two lists, deduplicating by normalized string content."""
+    """Union two lists, deduplicating by normalized content."""
     old_list = old_list or []
     new_list = new_list or []
     seen: set[str] = set()
@@ -298,7 +298,15 @@ def _merge_list_field(old_list: list | None, new_list: list | None) -> list:
         if isinstance(item, str):
             key = item.strip().lower()
         elif isinstance(item, dict):
-            key = json.dumps(item, sort_keys=True)
+            # For timeline/career entries, dedup by type+title+company
+            if "title" in item or "company" in item:
+                key = "|".join([
+                    (item.get("type") or "").lower().strip(),
+                    (item.get("title") or item.get("description", "")).lower().strip(),
+                    (item.get("company") or "").lower().strip(),
+                ])
+            else:
+                key = json.dumps(item, sort_keys=True)
         else:
             key = str(item)
         if key not in seen:
