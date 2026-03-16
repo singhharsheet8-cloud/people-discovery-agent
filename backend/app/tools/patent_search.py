@@ -1,4 +1,9 @@
-"""Google Patents search via search_provider (Serper.dev or SerpAPI)."""
+"""Google Patents search via search_provider (Serper.dev or SerpAPI).
+
+Improvement: verifies the inventor/assignee field or snippet actually
+mentions the person's name before including a result — prevents namesake
+pollution from generic patent searches.
+"""
 
 import logging
 
@@ -6,6 +11,22 @@ from app.cache import get_cached_results, set_cached_results
 from app.tools.search_provider import google_patents
 
 logger = logging.getLogger(__name__)
+
+
+def _inventor_matches(person_name: str, item: dict) -> bool:
+    """Return True if the patent's metadata mentions the person by name."""
+    name_parts = [p for p in person_name.lower().split() if len(p) > 2]
+    if not name_parts:
+        return False
+
+    searchable = " ".join([
+        item.get("inventor", ""),
+        item.get("assignee", ""),
+        item.get("snippet", item.get("description", "")),
+        item.get("title", ""),
+    ]).lower()
+
+    return all(p in searchable for p in name_parts)
 
 
 async def search_patents(
@@ -21,9 +42,13 @@ async def search_patents(
         data = await google_patents(inventor_name, num=max_results + 5)
         organic = data.get("organic_results", [])
         results = []
-        for item in organic[:max_results]:
+        for item in organic:
             if not isinstance(item, dict):
                 continue
+
+            if not _inventor_matches(inventor_name, item):
+                continue
+
             title = item.get("title", "")
             patent_id = item.get("patent_id", item.get("patentId", ""))
             link = item.get("patent_link", "") or item.get("link", "") or item.get("pdf", "") or f"https://patents.google.com/patent/{patent_id}"
@@ -59,6 +84,9 @@ async def search_patents(
                     },
                 }
             )
+            if len(results) >= max_results:
+                break
+
         await set_cached_results(cache_key, "patents", results)
         return results
     except Exception as e:

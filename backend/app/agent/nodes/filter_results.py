@@ -37,6 +37,16 @@ ANCHOR_RELEVANCE_THRESHOLD: float = 0.45
 SCORE_ONLY_THRESHOLD: float = 0.65
 
 
+_NAMESAKE_PRONE_TYPES = {"scholar", "academic", "medium", "reddit", "patent", "stackoverflow"}
+
+# Institutions that signal a student/academic namesake (not an industry professional)
+_ACADEMIC_INSTITUTION_SIGNALS = {
+    "student", "institute of technology", "university", "college",
+    "department of", "vellore", "bms institute", "nift", "iit ",
+    "read 2 publications", "read 1 publication", "cited by",
+}
+
+
 def _result_matches_identity(
     result: dict,
     anchors: list[str],
@@ -47,7 +57,9 @@ def _result_matches_identity(
     Gate logic:
       1. CORRECT label  → pass immediately
       2. WRONG_PERSON   → fail immediately
-      3. UNCERTAIN      → check anchor presence + relevance score
+      3. namesake_flag  → fail immediately
+      4. UNCERTAIN      → check anchor presence + relevance score
+      5. Namesake-prone sources (scholar/academic/medium) get extra scrutiny
     """
     label = result.get("disambiguation_label", "UNCERTAIN")
 
@@ -55,9 +67,32 @@ def _result_matches_identity(
         return True
     if label == "WRONG_PERSON":
         return False
+    if result.get("namesake_flag"):
+        return False
 
-    # UNCERTAIN — apply anchor + score gate
+    stype = result.get("source_type", "web")
     rel_score = float(result.get("relevance_score", result.get("confidence", 0)) or 0)
+
+    # Extra gate for namesake-prone source types: require an anchor match
+    # regardless of score, unless the LLM explicitly marked it CORRECT
+    if stype in _NAMESAKE_PRONE_TYPES:
+        text = (
+            (result.get("title") or "") + " " + (result.get("content") or "")
+        ).lower()
+
+        # Reject academic results that mention student/university signals
+        # but none of the identity anchors (company, role keywords)
+        if stype in ("scholar", "academic"):
+            has_academic_signal = any(sig in text for sig in _ACADEMIC_INSTITUTION_SIGNALS)
+            has_anchor = anchors and any(a.lower() in text for a in anchors)
+            if has_academic_signal and not has_anchor:
+                return False
+
+        # For medium/reddit/patent/stackoverflow, require at least one anchor or high relevance
+        if stype in ("medium", "reddit", "patent", "stackoverflow") and rel_score < SCORE_ONLY_THRESHOLD:
+            has_anchor = anchors and any(a.lower() in text for a in anchors)
+            if not has_anchor:
+                return False
 
     # Gate 2b: high scorer passes without anchor check
     if rel_score >= SCORE_ONLY_THRESHOLD:

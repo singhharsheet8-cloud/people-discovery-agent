@@ -58,9 +58,9 @@ async def search_stackoverflow(person_name: str, max_results: int = 5) -> list[d
 
             for user in data.get("items", [])[:3]:
                 display_name = user.get("display_name", "")
-                # Name match check — avoid totally unrelated users
                 dn_lower = display_name.lower()
-                if not any(p in dn_lower for p in name_parts if len(p) > 2):
+                significant_parts = [p for p in name_parts if len(p) > 2]
+                if not significant_parts or not all(p in dn_lower for p in significant_parts):
                     continue
 
                 user_id = user.get("user_id", "")

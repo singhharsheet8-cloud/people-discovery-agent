@@ -178,7 +178,11 @@ async def execute_searches(state: AgentState) -> dict:
         elif search_type == "medium":
             tasks.append(_with_timeout(_run_medium(query_str)))
         elif search_type == "scholar":
-            tasks.append(_with_timeout(_run_scholar(query_str)))
+            tasks.append(_with_timeout(_run_scholar(
+                query_str,
+                company=input_data.get("company", ""),
+                role=input_data.get("role", ""),
+            )))
         elif search_type == "instagram":
             tasks.append(_with_timeout(_run_instagram(query_str)))
         elif search_type == "google_news":
@@ -399,8 +403,8 @@ async def _run_medium(query: str):
     return await search_medium_articles(query)
 
 
-async def _run_scholar(query: str):
-    return await search_scholar(query)
+async def _run_scholar(query: str, company: str = "", role: str = ""):
+    return await search_scholar(query, company=company, role=role)
 
 
 async def _run_instagram(username: str):

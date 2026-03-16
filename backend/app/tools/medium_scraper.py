@@ -81,27 +81,30 @@ def _strip_html(html: str) -> str:
 
 
 def _name_matches(person_name: str, title: str, desc: str, creator: str) -> bool:
-    """Return True if any significant part of the name appears in the text."""
-    name_parts = person_name.lower().split()
-    combined = f"{title} {desc[:500]} {creator}".lower()
-    # Accept if full name matches, OR if both first+last match, OR at least 2 parts match
+    """Return True if the person's full name appears in the article metadata.
+    Require ALL significant name parts to appear — single-part matches cause
+    massive false positives (e.g. any author named 'Prashant').
+    """
+    name_parts = [p for p in person_name.lower().split() if len(p) > 2]
+    if not name_parts:
+        return False
+    combined = f"{title} {creator}".lower()
     if person_name.lower() in combined:
         return True
-    matches = sum(1 for p in name_parts if p in combined and len(p) > 2)
-    return matches >= min(2, len(name_parts))
+    return all(p in combined for p in name_parts)
 
 
 async def _medium_rss_search(person_name: str, max_results: int) -> list[dict]:
-    """Search Medium via tag-based RSS feeds."""
+    """Search Medium via tag-based RSS feeds.
+    Only use the full hyphenated name as a tag — individual name parts
+    (e.g. "prashant") return thousands of unrelated articles.
+    """
     results: list[dict] = []
     name_parts = person_name.lower().split()
 
-    # Build diverse tag candidates
     tags: list[str] = []
     if len(name_parts) >= 2:
-        tags.append("-".join(name_parts))          # "john-smith"
-        tags.append(name_parts[0])                  # "john"
-        tags.append(name_parts[-1])                 # "smith"
+        tags.append("-".join(name_parts))          # "prashant-parashar"
     else:
         tags.append(name_parts[0])
 

@@ -1,4 +1,9 @@
-"""Google Scholar search via search_provider (Serper.dev or SerpAPI)."""
+"""Google Scholar search via search_provider (Serper.dev or SerpAPI).
+
+Includes optional company/role context to disambiguate namesakes — a search
+for 'Prashant Parashar' alone returns students and academics, not the SVP
+at Delhivery.
+"""
 
 import logging
 
@@ -9,16 +14,27 @@ logger = logging.getLogger(__name__)
 
 
 async def search_scholar(
-    person_name: str, max_results: int = 5
+    person_name: str,
+    max_results: int = 5,
+    company: str = "",
+    role: str = "",
 ) -> list[dict]:
-    """Search Google Scholar for publications by or about a person."""
-    cache_key = f"scholar:{person_name}"
+    """Search Google Scholar for publications by or about a person.
+
+    When company/role are provided, the query is augmented to reduce
+    namesake pollution (e.g. 'Prashant Parashar Delhivery').
+    """
+    query = person_name
+    if company:
+        query = f"{person_name} {company}"
+
+    cache_key = f"scholar:{query}"
     cached = await get_cached_results(cache_key, "scholar")
     if cached is not None:
         return cached
 
     try:
-        data = await google_scholar(person_name, num=max_results)
+        data = await google_scholar(query, num=max_results)
         organic = data.get("organic_results", [])
         results = []
         for item in organic[:max_results]:
