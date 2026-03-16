@@ -117,7 +117,7 @@ async def test_post_discover_invalid_twitter_handle_returns_422(client, admin_to
 
 
 @pytest.mark.asyncio
-async def test_get_job_valid_uuid_returns_job(client, db_session):
+async def test_get_job_valid_uuid_returns_job(client, admin_token, db_session):
     """GET /api/jobs/{id} with valid UUID returns job."""
     from app.models.db_models import DiscoveryJob
 
@@ -132,7 +132,7 @@ async def test_get_job_valid_uuid_returns_job(client, db_session):
         await session.commit()
         job_id = job.id
 
-    resp = await client.get(f"/api/jobs/{job_id}")
+    resp = await client.get(f"/api/jobs/{job_id}", headers=auth_headers(admin_token))
     assert resp.status_code == 200
     data = resp.json()
     assert data["id"] == job_id
@@ -140,14 +140,21 @@ async def test_get_job_valid_uuid_returns_job(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_job_invalid_uuid_returns_400(client):
+async def test_get_job_invalid_uuid_returns_400(client, admin_token):
     """GET /api/jobs/{id} with invalid UUID returns 400."""
-    resp = await client.get("/api/jobs/not-a-uuid")
+    resp = await client.get("/api/jobs/not-a-uuid", headers=auth_headers(admin_token))
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_get_job_nonexistent_returns_404(client):
+async def test_get_job_nonexistent_returns_404(client, admin_token):
     """GET /api/jobs/{id} with nonexistent UUID returns 404."""
-    resp = await client.get(f"/api/jobs/{uuid.uuid4()}")
+    resp = await client.get(f"/api/jobs/{uuid.uuid4()}", headers=auth_headers(admin_token))
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_job_requires_auth(client):
+    """GET /api/jobs/{id} without auth returns 401."""
+    resp = await client.get(f"/api/jobs/{uuid.uuid4()}")
+    assert resp.status_code == 401

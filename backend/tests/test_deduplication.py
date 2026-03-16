@@ -16,6 +16,7 @@ from app.api.routes import (
 )
 
 
+
 class TestNormalizeName:
     def test_basic(self):
         assert _normalize_name("John Doe") == "john doe"

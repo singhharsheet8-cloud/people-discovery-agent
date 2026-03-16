@@ -15,6 +15,7 @@ from app.db import get_session_factory
 from app.models.db_models import Person, PersonSource, DiscoveryJob, PersonVersion, AdminUser, compute_name_key
 from app.cache import cleanup_expired_cache
 from app.auth import require_admin, require_api, require_viewer
+from app.embeddings import update_person_embedding
 from passlib.hash import bcrypt
 from app.rate_limiter import rate_limiter
 from app.config import get_settings
@@ -109,6 +110,11 @@ class PersonDetail(BaseModel):
     expertise: list | None = None
     notable_work: list | None = None
     career_timeline: list | None = None
+    skills: list | None = None
+    projects: list | None = None
+    recommendations: list | None = None
+    followers_count: int | None = None
+    blog_url: str | None = None
     confidence_score: float = 0.0
     reputation_score: float | None = None
     status: str = "discovered"
@@ -124,8 +130,23 @@ class PersonUpdate(BaseModel):
     current_role: str | None = Field(None, max_length=500)
     company: str | None = Field(None, max_length=500)
     location: str | None = Field(None, max_length=255)
-    bio: str | None = Field(None, max_length=10000)
+    bio: str | None = Field(None, max_length=20000)
     image_url: str | None = None
+    # Extended fields for manual data enrichment
+    confidence_score: float | None = None
+    reputation_score: float | None = None
+    status: str | None = None
+    key_facts: list | None = None
+    education: list | None = None
+    career_timeline: list | None = None
+    expertise: list | None = None
+    notable_work: list | None = None
+    social_links: dict | None = None
+    skills: list | None = None
+    projects: list | None = None
+    recommendations: list | None = None
+    followers_count: int | None = None
+    blog_url: str | None = Field(None, max_length=500)
 
 
 class JobDetail(BaseModel):
@@ -228,6 +249,39 @@ async def batch_discover(request: BatchDiscoverRequest, _auth=Depends(require_ap
     return {"jobs": jobs, "total": len(jobs)}
 
 
+def _normalize_name(name: str) -> str:
+    """Lowercase and strip punctuation from a name string."""
+    import re as _re
+    return _re.sub(r"[^\w\s]", "", name.strip().lower())
+
+
+def _names_match(a: str, b: str) -> bool:
+    """Return True if names refer to the same person (case-insensitive, word-order invariant)."""
+    if not a or not b:
+        return False
+    norm_a = set(_normalize_name(a).split())
+    norm_b = set(_normalize_name(b).split())
+    if not norm_a or not norm_b:
+        return False
+    return norm_a == norm_b
+
+
+def _companies_match(a: str | None, b: str | None) -> bool:
+    """Return True if two company strings refer to the same company."""
+    _SUFFIXES = {"inc", "corp", "ltd", "llc", "co", "corporation", "limited", "incorporated"}
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    def _clean(s: str) -> str:
+        import re as _re
+        s = s.strip().lower()
+        parts = s.split()
+        parts = [p.rstrip(".,") for p in parts if p.rstrip(".,") not in _SUFFIXES]
+        return " ".join(parts)
+    return _clean(a) == _clean(b)
+
+
 async def _find_existing_person(session: AsyncSession, name: str, company: str | None) -> Person | None:
     """
     Return an existing Person whose canonical name_key matches the incoming name.
@@ -315,6 +369,14 @@ async def _run_discovery(job_id: str, input_data: dict):
             "person_profile": None,
             "cost_tracker": {},
             "status": "started",
+            # Iterative enrichment / disambiguation fields
+            "iteration": 0,
+            "identity_anchors": [],
+            "filtered_results": [],
+            "refinement_queries": [],
+            "refinement_signals": [],
+            "executed_query_hashes": [],
+            "abort_reason": None,
         }
 
         result = await graph.ainvoke(initial_state)
@@ -364,7 +426,8 @@ async def _run_discovery(job_id: str, input_data: dict):
                     person.image_url = profile["image_url"]
                 person.status = "discovered"
 
-                list_fields = ("education", "key_facts", "expertise", "notable_work", "career_timeline")
+                list_fields = ("education", "key_facts", "expertise", "notable_work", "career_timeline",
+                               "skills", "projects", "recommendations")
                 for field in list_fields:
                     old_val = person.get_json(field)
                     new_val = profile.get(field)
@@ -380,6 +443,12 @@ async def _run_discovery(job_id: str, input_data: dict):
                     if merged:
                         person.set_json(field, merged)
 
+                # Scalar enrichment fields — only update if new value is provided and current is empty
+                if profile.get("followers_count") and not person.followers_count:
+                    person.followers_count = profile["followers_count"]
+                if profile.get("blog_url") and not person.blog_url:
+                    person.blog_url = profile["blog_url"]
+
                 person.version += 1
                 person.updated_at = datetime.now(timezone.utc)
 
@@ -394,10 +463,15 @@ async def _run_discovery(job_id: str, input_data: dict):
                     confidence_score=profile.get("confidence_score", result.get("confidence_score", 0)),
                     status="discovered",
                 )
-                for field in ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline"):
+                for field in ("education", "key_facts", "social_links", "expertise", "notable_work",
+                              "career_timeline", "skills", "projects", "recommendations"):
                     val = profile.get(field)
                     if val:
                         person.set_json(field, val)
+                if profile.get("followers_count"):
+                    person.followers_count = profile["followers_count"]
+                if profile.get("blog_url"):
+                    person.blog_url = profile["blog_url"]
                 session.add(person)
 
             await session.flush()
@@ -789,9 +863,15 @@ async def update_person(person_id: str, update: PersonUpdate, _admin=Depends(req
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
 
+        _JSON_FIELDS = {"key_facts", "education", "career_timeline", "expertise", "notable_work", "social_links",
+                        "skills", "projects", "recommendations"}
         update_data = update.model_dump(exclude_none=True)
         for key, value in update_data.items():
-            setattr(person, key, value)
+            # JSON columns are stored as strings in the DB — serialize lists/dicts
+            if key in _JSON_FIELDS and isinstance(value, (list, dict)):
+                setattr(person, key, json.dumps(value))
+            else:
+                setattr(person, key, value)
         person.version += 1
 
         version = PersonVersion(
@@ -1691,6 +1771,11 @@ def _person_to_dict(person: Person) -> dict:
         "expertise": person.get_json("expertise"),
         "notable_work": person.get_json("notable_work"),
         "career_timeline": person.get_json("career_timeline"),
+        "skills": person.get_json("skills"),
+        "projects": person.get_json("projects"),
+        "recommendations": person.get_json("recommendations"),
+        "followers_count": person.followers_count,
+        "blog_url": person.blog_url,
         "confidence_score": person.confidence_score,
         "reputation_score": person.reputation_score,
         "status": person.status,
@@ -1711,9 +1796,10 @@ _SCALAR_FIELDS = {
 }
 _JSON_FIELDS = {
     "education", "key_facts", "social_links", "expertise",
-    "notable_work", "career_timeline",
+    "notable_work", "career_timeline", "skills", "projects", "recommendations",
 }
-_ALL_FIELDS = _SCALAR_FIELDS | _JSON_FIELDS
+_SCALAR_ENRICHMENT_FIELDS = {"followers_count", "blog_url"}
+_ALL_FIELDS = _SCALAR_FIELDS | _JSON_FIELDS | _SCALAR_ENRICHMENT_FIELDS
 
 # Which platforms are most authoritative for each field.
 # Sources matching these platforms are ranked higher in the per-field source list.
@@ -1980,6 +2066,11 @@ async def get_person_summary(
         "education": person.get_json("education") or [],
         "career_timeline": person.get_json("career_timeline") or [],
         "social_links": person.get_json("social_links") or {},
+        "skills": person.get_json("skills") or [],
+        "projects": person.get_json("projects") or [],
+        "recommendations": person.get_json("recommendations") or [],
+        "followers_count": person.followers_count,
+        "blog_url": person.blog_url,
         "confidence_score": person.confidence_score,
         "reputation_score": person.reputation_score,
         "sources_count": sources_count,

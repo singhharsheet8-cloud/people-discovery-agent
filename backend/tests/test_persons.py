@@ -9,9 +9,9 @@ from tests.conftest import auth_headers
 
 
 @pytest.mark.asyncio
-async def test_get_persons_returns_paginated_list(client, db_session):
+async def test_get_persons_returns_paginated_list(client, admin_token, db_session):
     """GET /api/persons returns paginated list."""
-    resp = await client.get("/api/persons")
+    resp = await client.get("/api/persons", headers=auth_headers(admin_token))
     assert resp.status_code == 200
     data = resp.json()
     assert "items" in data
@@ -22,7 +22,14 @@ async def test_get_persons_returns_paginated_list(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_persons_search_filters_results(client, db_session):
+async def test_get_persons_requires_auth(client, db_session):
+    """GET /api/persons without auth returns 401."""
+    resp = await client.get("/api/persons")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_persons_search_filters_results(client, admin_token, db_session):
     """GET /api/persons?search=X filters results."""
     factory = get_session_factory()
     async with factory() as session:
@@ -30,7 +37,7 @@ async def test_get_persons_search_filters_results(client, db_session):
         session.add(p)
         await session.commit()
 
-    resp = await client.get("/api/persons?search=Alice")
+    resp = await client.get("/api/persons?search=Alice", headers=auth_headers(admin_token))
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1
@@ -38,7 +45,7 @@ async def test_get_persons_search_filters_results(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_person_detail_returns_with_sources(client, db_session):
+async def test_get_person_detail_returns_with_sources(client, admin_token, db_session):
     """GET /api/persons/{id} returns person detail with sources."""
     factory = get_session_factory()
     async with factory() as session:
@@ -57,7 +64,7 @@ async def test_get_person_detail_returns_with_sources(client, db_session):
         await session.commit()
         person_id = p.id
 
-    resp = await client.get(f"/api/persons/{person_id}")
+    resp = await client.get(f"/api/persons/{person_id}", headers=auth_headers(admin_token))
     assert resp.status_code == 200
     data = resp.json()
     assert data["id"] == person_id
@@ -67,10 +74,17 @@ async def test_get_person_detail_returns_with_sources(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_person_invalid_uuid_returns_400(client):
+async def test_get_person_invalid_uuid_returns_400(client, admin_token):
     """GET /api/persons/{invalid-uuid} returns 400."""
-    resp = await client.get("/api/persons/not-a-uuid")
+    resp = await client.get("/api/persons/not-a-uuid", headers=auth_headers(admin_token))
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_person_requires_auth(client):
+    """GET /api/persons/{id} without auth returns 401."""
+    resp = await client.get(f"/api/persons/{uuid.uuid4()}")
+    assert resp.status_code == 401
 
 
 @pytest.mark.asyncio

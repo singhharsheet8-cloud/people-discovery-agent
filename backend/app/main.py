@@ -33,12 +33,12 @@ from app.middleware import (
 
 
 def _fix_ssl():
-    try:
-        import truststore
-        truststore.inject_into_ssl()
-        return
-    except Exception:
-        pass
+    # On macOS Python 3.10 the system cert store isn't in Python's bundle.
+    # We DON'T use truststore.inject_into_ssl() globally because it breaks
+    # asyncpg against Supabase's non-standard pooler cert.
+    # Instead, embeddings.py builds an httpx client with truststore.SSLContext
+    # directly (targeted fix, no global side-effects).
+    # Fallback: point certifi env vars for any remaining plain-ssl callers.
     try:
         import certifi
         os.environ.setdefault("SSL_CERT_FILE", certifi.where())

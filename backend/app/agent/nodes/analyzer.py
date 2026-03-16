@@ -7,16 +7,22 @@ from app.tools.source_scorer import score_sources
 
 logger = logging.getLogger(__name__)
 
+# Raised from 0.3 — sources below this are considered noise and dropped
+RELEVANCE_THRESHOLD: float = 0.55
+
 ANALYZER_SYSTEM_PROMPT = """You are an expert research analyst specializing in person identification and disambiguation.
 
-Given search results about a person, perform rigorous cross-referencing:
+Given ALREADY-FILTERED search results (only results for the correct person are present),
+perform rigorous cross-referencing to extract the most complete and accurate profile:
 
-1. DISAMBIGUATE: Determine which results refer to the SAME person vs namesakes
-2. EXTRACT: Pull out every available detail — name, role, company, location, education, expertise, achievements
-3. CROSS-REFERENCE: Note when multiple sources confirm the same fact (increases confidence)
-4. IDENTIFY GAPS: What critical info is still missing?
+1. EXTRACT: Pull out every available detail — name, role, company, location, education,
+   expertise, achievements, career history, publications, talks, social handles
+2. CROSS-REFERENCE: Note when multiple sources confirm the same fact (increases confidence)
+3. IDENTIFY GAPS: What critical info is still missing?
+4. DO NOT FABRICATE: Only include facts explicitly supported by the sources
 
-Key signals for matching: same company, same role, consistent location, mutual connections, consistent expertise area.
+Note: Disambiguation has already been done upstream. You are working with pre-filtered,
+identity-validated results. Focus entirely on extraction and cross-referencing.
 
 Respond with valid JSON only:
 {
@@ -33,17 +39,17 @@ Respond with valid JSON only:
       "notable_work": ["Achievement 1"],
       "social_links": {"linkedin": "url", "twitter": "url", "github": "url"},
       "supporting_sources": [0, 1, 3],
-      "key_facts": ["fact confirmed by sources"]
+      "key_facts": ["fact confirmed by sources"],
+      "career_history": ["Role at Company (Year-Year)"]
     }
   ],
-  "ambiguities": ["description of any ambiguity"],
+  "ambiguities": ["description of any remaining ambiguity"],
   "missing_info": ["what we still need"],
   "best_match_index": 0
 }"""
 
 
 def _format_input_for_prompt(input_data: dict) -> str:
-    """Format DiscoveryInput for the analyzer prompt."""
     parts = []
     if input_data.get("name"):
         parts.append(f"Name: {input_data['name']}")
@@ -61,11 +67,12 @@ def _format_input_for_prompt(input_data: dict) -> str:
 async def analyze_results(state: AgentState) -> dict:
     input_data = state.get("input", {})
     search_results = state.get("search_results", [])
+    identity_anchors = state.get("identity_anchors", [])
 
-    # ── Step 1: LLM source scoring (runs concurrently with analysis prep) ──
+    # ── Step 1: LLM source scoring ──
     source_scores = await score_sources(target=input_data, results=search_results)
 
-    # Attach scores back onto each result so they flow into synthesizer / DB
+    # Attach scores back onto each result
     scored_results = []
     for i, r in enumerate(search_results):
         r_copy = dict(r)
@@ -76,28 +83,50 @@ async def analyze_results(state: AgentState) -> dict:
             r_copy["corroboration_score"] = sc["corroboration"]
             r_copy["confidence"] = sc["confidence"]
             r_copy["scorer_reason"] = sc["reason"]
+            # Drop results the scorer flagged as namesakes
+            if sc.get("namesake_flag", False):
+                r_copy["disambiguation_label"] = "WRONG_PERSON"
         scored_results.append(r_copy)
 
-    # ── Step 2: Analyse / disambiguate with LLM ──
+    # ── Step 2: Filter out noise sources ──
+    filtered_for_analysis = [
+        r for r in scored_results
+        if (r.get("relevance_score") or 0) >= RELEVANCE_THRESHOLD
+        and r.get("disambiguation_label", "UNCERTAIN") != "WRONG_PERSON"
+    ]
+
+    dropped = len(scored_results) - len(filtered_for_analysis)
+    if dropped:
+        logger.info(
+            "[analyzer] Dropped %d sources below threshold=%.2f or flagged as namesakes",
+            dropped, RELEVANCE_THRESHOLD,
+        )
+
+    # Build summary for LLM
     results_summary = []
-    for i, r in enumerate(scored_results):
+    for i, r in enumerate(filtered_for_analysis):
         results_summary.append(
             f"[{i}] ({r.get('source_type', 'web')}) {r.get('title', 'No title')}\n"
             f"    URL: {r.get('url', '')}\n"
-            f"    Confidence: {r.get('confidence', 0.5):.2f}\n"
-            f"    Content: {r.get('content', '')[:600]}"
+            f"    Relevance: {r.get('relevance_score', 0):.2f} | "
+            f"Reliability: {r.get('source_reliability', 0):.2f}\n"
+            f"    Content: {r.get('content', '')[:700]}"
         )
 
     input_str = _format_input_for_prompt(input_data)
+    anchors_str = ", ".join(identity_anchors[:8]) if identity_anchors else "none"
 
-    user_prompt = f"""Original query / input:
+    user_prompt = f"""Person being researched:
 {input_str}
 
-Search results ({len(results_summary)} total, pre-scored for source quality):
+Confirmed identity anchors (employers, locations, domain):
+{anchors_str}
+
+Filtered search results ({len(results_summary)} relevant sources — namesakes already removed):
 {chr(10).join(results_summary)}
 
-Analyze these results and identify the person(s) they refer to.
-Prefer higher-confidence sources when resolving conflicts."""
+Extract every available fact about this person. Cross-reference across sources.
+Only include facts that appear in the sources above."""
 
     response, usage = await invoke_reasoning_llm([
         SystemMessage(content=ANALYZER_SYSTEM_PROMPT),
@@ -110,7 +139,7 @@ Prefer higher-confidence sources when resolving conflicts."""
     try:
         analysis = json.loads(response.content)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse analyzer response")
+        logger.warning("[analyzer] Failed to parse analyzer response")
         analysis = {
             "identified_people": [],
             "ambiguities": ["Could not parse search results"],
@@ -123,47 +152,49 @@ Prefer higher-confidence sources when resolving conflicts."""
     best_idx = max(0, min(best_idx, len(people) - 1)) if people else -1
     best = people[best_idx] if best_idx >= 0 and people else {}
 
-    # Only count sources whose relevance >= 0.3 as "relevant"
-    RELEVANCE_THRESHOLD = 0.3
-    relevant_scores = [s for s in source_scores if s.get("relevance", 0) >= RELEVANCE_THRESHOLD]
-    irrelevant_count = len(source_scores) - len(relevant_scores)
+    # ── Evidence-based confidence formula (no LLM self-reporting) ──
+    # The LLM's self-reported confidence is unreliable — count hard evidence instead
+    high_rel = [
+        s for s in source_scores
+        if s.get("relevance", 0) >= 0.75
+        and not s.get("namesake_flag", False)
+    ]
+    med_rel = [
+        s for s in source_scores
+        if 0.55 <= s.get("relevance", 0) < 0.75
+        and not s.get("namesake_flag", False)
+    ]
+    total_sources = max(len(source_scores), 1)
 
-    llm_conf = float(best.get("confidence", 0.5))
-    if relevant_scores:
-        avg_src_conf = sum(s["confidence"] for s in relevant_scores) / len(relevant_scores)
-        confidence_score = round((llm_conf * 0.6 + avg_src_conf * 0.4), 3)
-    else:
-        confidence_score = llm_conf * 0.5  # penalise if no relevant sources
+    # Weight: each high-relevance source = 1.0, medium = 0.5, scale to total
+    evidence_score = (len(high_rel) * 1.0 + len(med_rel) * 0.5) / total_sources
 
-    # Penalise if a large fraction of sources are irrelevant (noisy search)
-    if source_scores:
-        noise_ratio = irrelevant_count / len(source_scores)
-        if noise_ratio > 0.4:
-            confidence_score = round(confidence_score * (1 - noise_ratio * 0.3), 3)
+    # Anchor bonus: confirmed anchors add confidence (up to +0.15)
+    anchor_bonus = min(len(identity_anchors) * 0.025, 0.15)
 
-    confidence_score = min(confidence_score, 0.99)
+    confidence_score = round(min(evidence_score + anchor_bonus, 0.99), 3)
 
-    # Filter scored_results: drop sources below threshold
-    filtered_results = []
-    for r in scored_results:
-        if r.get("relevance_score", r.get("confidence", 0.5)) >= RELEVANCE_THRESHOLD:
-            filtered_results.append(r)
+    # Penalty: if a large fraction of sources are irrelevant noise
+    noise_count = len([s for s in source_scores if s.get("relevance", 0) < RELEVANCE_THRESHOLD])
+    noise_ratio = noise_count / total_sources
+    if noise_ratio > 0.5:
+        confidence_score = round(confidence_score * (1.0 - noise_ratio * 0.25), 3)
 
     logger.info(
-        "Analysis: %d matches, %d ambiguities, llm_conf=%.3f, "
-        "relevant_src=%d/%d, src_avg=%.3f → final=%.3f",
+        "[analyzer] %d people identified | high_rel=%d med_rel=%d/%d | "
+        "evidence=%.3f anchors=%d → confidence=%.3f",
         len(people),
-        len(analysis.get("ambiguities", [])),
-        llm_conf,
-        len(relevant_scores),
-        len(source_scores),
-        sum(s["confidence"] for s in relevant_scores) / len(relevant_scores) if relevant_scores else 0,
+        len(high_rel),
+        len(med_rel),
+        total_sources,
+        evidence_score,
+        len(identity_anchors),
         confidence_score,
     )
 
     return {
         "analyzed_results": analysis,
-        "search_results": filtered_results,
+        "search_results": filtered_for_analysis,
         "confidence_score": confidence_score,
         "cost_tracker": cost_tracker,
         "status": "analysis_complete",

@@ -1,23 +1,30 @@
 import asyncio
 import logging
+import re
+
 from app.agent.state import AgentState
-from app.tools.tavily_search import search_tavily
-from app.tools.github_search import search_github_users
-from app.tools.youtube_transcript import search_and_transcribe
-from app.tools.linkedin_scraper import scrape_linkedin_profile, scrape_linkedin_posts, search_linkedin_by_name
-from app.tools.twitter_scraper import scrape_twitter_profile
-from app.tools.reddit_scraper import search_reddit_mentions
-from app.tools.medium_scraper import search_medium_articles
-from app.tools.scholar_search import search_scholar
-from app.tools.firecrawl_extract import batch_extract
-from app.tools.instagram_scraper import scrape_instagram_profile
-from app.tools.google_news_search import search_google_news
 from app.tools.crunchbase_search import search_crunchbase
+from app.tools.firecrawl_extract import batch_extract, _is_blocked_domain
+from app.tools.github_search import search_github_users
+from app.tools.google_news_search import search_google_news
+from app.tools.instagram_scraper import scrape_instagram_profile
+from app.tools.linkedin_scraper import (
+    scrape_linkedin_experience,
+    scrape_linkedin_posts,
+    scrape_linkedin_profile,
+    search_linkedin_by_name,
+)
+from app.tools.medium_scraper import search_medium_articles
 from app.tools.patent_search import search_patents
+from app.tools.reddit_scraper import search_reddit_mentions
+from app.tools.scholar_search import search_scholar
 from app.tools.stackoverflow_search import search_stackoverflow
+from app.tools.tavily_search import search_tavily
+from app.tools.twitter_scraper import scrape_twitter_profile, search_twitter_by_name
+from app.tools.youtube_transcript import search_and_transcribe
 
 logger = logging.getLogger(__name__)
-SEARCH_TIMEOUT = 30
+SEARCH_TIMEOUT = 45
 
 GAP_FILL_PLATFORMS = [
     "youtube",
@@ -209,7 +216,10 @@ async def execute_searches(state: AgentState) -> dict:
 
     if urls_for_firecrawl:
         try:
-            deep_results = await _with_timeout(batch_extract(urls_for_firecrawl[:5]))
+            # Prioritize non-blocked, content-rich domains (news, blogs, crunchbase)
+            # and cap at 8 to get more coverage while respecting Firecrawl limits
+            prioritized = [u for u in urls_for_firecrawl if not _is_blocked_domain(u)]
+            deep_results = await _with_timeout(batch_extract(prioritized[:8]))
             if deep_results and not isinstance(deep_results, Exception):
                 for r in deep_results:
                     r_dict = r if isinstance(r, dict) else r
@@ -222,6 +232,36 @@ async def execute_searches(state: AgentState) -> dict:
                         all_results.append(r_dict)
         except Exception as e:
             logger.warning(f"Firecrawl batch extract failed: {e}")
+
+    # Deep-scrape LinkedIn experience page for full career history
+    linkedin_url = input_data.get("linkedin_url", "")
+    if not linkedin_url:
+        # Try to discover LinkedIn URL from gathered results
+        for r in all_results:
+            url = r.get("url", "")
+            if "linkedin.com/in/" in url and "/posts/" not in url and "/pulse/" not in url:
+                linkedin_url = url.split("?")[0].rstrip("/")
+                break
+
+    if linkedin_url and "linkedin.com/in/" in linkedin_url:
+        already_scraped_experience = any(
+            r.get("source_type") == "linkedin_experience" for r in all_results
+        )
+        if not already_scraped_experience:
+            try:
+                exp_results = await _with_timeout(scrape_linkedin_experience(linkedin_url), timeout=45)
+                if exp_results and not isinstance(exp_results, Exception):
+                    for r in exp_results:
+                        url = r.get("url", "")
+                        st = r.get("source_type", "linkedin_experience")
+                        dk = (url.split("?")[0].rstrip("/"), st)
+                        if url and dk not in seen_keys:
+                            seen_keys.add(dk)
+                            seen_urls.add(url)
+                            all_results.append(r)
+                    logger.info(f"LinkedIn experience scraped: {len(exp_results)} result(s)")
+            except Exception as e:
+                logger.warning(f"LinkedIn experience scrape step failed: {e}")
 
     # Auto-discover and scrape Twitter/Instagram handles from gathered results
     got_twitter = any(
@@ -265,7 +305,6 @@ async def execute_searches(state: AgentState) -> dict:
 
 def _extract_social_handles(results: list[dict], seen_urls: set[str]) -> dict[str, str]:
     """Scan gathered search results for Twitter/Instagram handles and URLs."""
-    import re
     twitter_handle = ""
     instagram_handle = ""
 
@@ -340,9 +379,8 @@ async def _run_twitter(handle: str):
 
 
 async def _run_twitter_search(person_name: str):
-    """Search for a person's Twitter/X presence via SerpAPI when no handle is known."""
-    from app.tools.twitter_scraper import _try_serpapi
-    return await _try_serpapi(person_name)
+    """Search for a person's Twitter/X presence by name when no handle is known."""
+    return await search_twitter_by_name(person_name)
 
 
 async def _run_youtube(query: str):

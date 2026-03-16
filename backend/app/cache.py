@@ -37,8 +37,11 @@ SOURCE_TTL_MAP = {
     "linkedin": "cache_ttl_linkedin",
     "youtube": "cache_ttl_youtube",
     "blog": "cache_ttl_web",
+    # LinkedIn experience deep-scrape (cached for 7 days like other LinkedIn data)
+    "linkedin_experience": "cache_ttl_linkedin",
     # Image resolver
     "image_resolver_v4": "cache_ttl_linkedin",
+    "image_resolver_v6": "cache_ttl_linkedin",
     # Patent search
     "patents": "cache_ttl_youtube",
     # Google News

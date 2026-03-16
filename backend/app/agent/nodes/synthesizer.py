@@ -7,8 +7,31 @@ from app.utils import extract_usage, estimate_cost
 
 logger = logging.getLogger(__name__)
 
-SYNTHESIZER_SYSTEM_PROMPT = """You are an elite intelligence analyst producing the most comprehensive person dossier possible.
-Synthesize ALL available information into a richly detailed, well-structured profile.
+SYNTHESIZER_SYSTEM_PROMPT = """You are an elite intelligence analyst producing the most accurate and comprehensive person dossier possible.
+
+═══════════════════════════════════════════════════════════════
+STRICT ANTI-HALLUCINATION RULES — READ CAREFULLY, FOLLOW EXACTLY
+═══════════════════════════════════════════════════════════════
+1. SOURCE-BACKED ONLY: Every factual claim in the bio, key_facts, career_timeline,
+   education, and notable_work MUST be explicitly supported by at least one source
+   in the Sources section. If it's not in a source, do NOT include it.
+
+2. SINGLE-SOURCE QUALIFICATION: If a fact appears in only ONE source AND that
+   source has relevance_score < 0.75, qualify it in the bio with "reportedly",
+   "according to [source name]", or "as reported by [platform]".
+
+3. NO INFERENCE: Do NOT infer, extrapolate, or fill gaps with plausible-sounding
+   information. Example: if no founding year is given, do not write one. If a role
+   duration is unknown, leave start_date / end_date as empty strings.
+
+4. NULL OVER GUESS: If you cannot fill a field from the sources, use null for
+   string fields and [] for list fields. Never fabricate a plausible value.
+
+5. IDENTITY-LOCKED: The identity anchors provided tell you which companies, roles,
+   and locations belong to THIS person. If a source mentions a company that is NOT
+   in the anchors list, verify it appears in a CORRECT-labeled or high-confidence
+   source before including it.
+═══════════════════════════════════════════════════════════════
 
 INSTRUCTIONS:
 1. Cross-reference facts across multiple sources for accuracy
@@ -17,21 +40,22 @@ INSTRUCTIONS:
 4. Include direct URLs when available (LinkedIn, GitHub, Twitter, YouTube channels)
 5. Write a comprehensive, detailed bio (see instructions below)
 6. For each source, rate its confidence (0.0-1.0) based on source authority and corroboration
-7. Do NOT fabricate information — only use what is supported by the sources
-8. Fill in EVERY field possible from the available data
+7. Fill in EVERY field possible from the available data
 
 BIO INSTRUCTIONS — THIS IS THE MOST IMPORTANT FIELD:
-Write a comprehensive 400-600 word profile covering ALL of the following sections:
-- **Background & Early Career**: Origins, education, early career steps. Include ALL previous companies and roles from the sources.
+Write a comprehensive 400-600 word profile covering ALL of the following sections
+(ONLY if the information exists in the sources — skip sections for which no data is available):
+- **Background & Early Career**: Origins, education, early career steps. Include ALL previous companies and roles mentioned in sources.
 - **Current Role & Responsibilities**: What they do now, their scope of influence
 - **Key Achievements**: Major milestones, transformations, products launched, deals closed
-- **Leadership & Philosophy**: Management style, public statements, cultural impact
+- **Leadership & Philosophy**: Management style, public statements, cultural impact (only if sourced)
 - **Industry Impact**: How they've shaped their industry, thought leadership
-- **Recent Activity**: Latest news, initiatives, public appearances (from 2024-2026)
-- **Personal**: Any known personal details — books authored, philanthropy, hobbies, family (only if publicly available)
+- **Recent Activity**: Latest news, initiatives, public appearances (from 2024-2026 if available)
+- **Personal**: Any known personal details — books authored, philanthropy, hobbies (only if publicly available in sources)
 
 CAREER TIMELINE INSTRUCTIONS:
-Include EVERY past and current role mentioned in the sources. If the sources mention the person worked at Company X in any capacity, include it. Include education entries. Each entry must be unique (no duplicates). Order chronologically where dates are known.
+Include EVERY past and current role mentioned in the sources. Each entry must be unique.
+Order chronologically where dates are known. Do NOT include roles that are not in the sources.
 
 Write in third person, authoritative tone. Use specific numbers, dates, and facts from the sources.
 Do NOT use bullet points in the bio — write flowing paragraphs.
@@ -49,6 +73,11 @@ Respond with valid JSON matching this schema:
   "expertise": ["Specific domain expertise areas (8-12 items)"],
   "notable_work": ["Significant achievements, publications, projects, or companies (8-12 items with context)"],
   "career_timeline": [{"type": "education|role", "title": "", "company": "", "start_date": "", "end_date": "", "description": ""}],  // EVERY role and education — include ALL past companies and positions mentioned in sources. NO DUPLICATES.
+  "skills": ["skill1", "skill2"],  // Technical and domain skills mentioned in sources (up to 20)
+  "projects": [{"name": "", "description": "", "url": "", "dates": ""}],  // Side projects, open source, etc.
+  "recommendations": [{"recommender_name": "", "recommender_title": "", "text": ""}],  // Up to 5 key recommendations
+  "followers_count": null,  // LinkedIn/Twitter follower count if mentioned in sources (integer or null)
+  "blog_url": null,  // Personal blog or website URL if mentioned in sources
   "reputation_score": 0.0-1.0,
   "social_links": {"linkedin": "url", "twitter": "url", "github": "url", "website": "url"},
   "sources": [
@@ -119,6 +148,7 @@ async def synthesize_profile(state: AgentState) -> dict:
     analysis = state.get("analyzed_results", {})
     results = state.get("search_results", [])
     enrichment = state.get("enrichment", {})
+    identity_anchors = state.get("identity_anchors", [])
 
     people = analysis.get("identified_people", [])
     best_idx = analysis.get("best_match_index", 0)
@@ -152,18 +182,27 @@ async def synthesize_profile(state: AgentState) -> dict:
     sources_text = _build_sources_text(results)
     all_sources_str = "\n\n".join(sources_text)
 
-    user_prompt = f"""Create the most comprehensive profile possible for:
-{input_str}
+    anchors_str = ""
+    if identity_anchors:
+        anchors_str = f"\nCONFIRMED IDENTITY ANCHORS (companies/locations/domain for THIS person — use these to validate claims):\n{', '.join(identity_anchors[:10])}\n"
 
+    user_prompt = f"""Create the most accurate and comprehensive profile possible for:
+{input_str}
+{anchors_str}
 {analysis_text}
 {career_timeline_str}
 {facts_str}
 {sentiment_str}
 
-ALL Sources ({len(sources_text)} total):
+ALL Sources ({len(sources_text)} total — already filtered to remove wrong-person results):
 {all_sources_str}
 
-IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, leadership, industry impact, and recent activity. Use specific facts, numbers, and dates from the sources. Every field should be as complete as possible. Rate each source's confidence based on how authoritative and relevant it is."""
+IMPORTANT REMINDERS:
+- Write a DETAILED 400-600 word bio BUT only include facts present in the sources above
+- If a fact is from a single low-confidence source, qualify it: "reportedly", "according to [source]"
+- Use null for any field you cannot fill from sources — do NOT fabricate
+- Every career_timeline entry must reference a company or role explicitly named in the sources
+- Rate each source's confidence based on how authoritative and relevant it is"""
 
     response = await llm.ainvoke([
         SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
@@ -192,7 +231,18 @@ IMPORTANT: Write a DETAILED 400-600 word bio covering background, achievements, 
         logger.error(f"Raw response (first 500 chars): {response.content[:500]}")
         profile = _build_fallback_profile(state, analysis, enrichment)
 
-    profile["confidence_score"] = min(state.get("confidence_score", 0), 0.99)
+    # Recalculate final confidence based on full evidence set (overrides the early disambiguate estimate)
+    all_results = state.get("search_results", [])
+    high_rel = sum(1 for r in all_results if r.get("relevance_score", 0) >= 0.7)
+    med_rel = sum(1 for r in all_results if 0.45 <= r.get("relevance_score", 0) < 0.7)
+    anchor_count = len(state.get("identity_anchors", []))
+    # Base score from evidence density
+    evidence_score = min((high_rel * 0.06 + med_rel * 0.02), 0.75)
+    anchor_bonus = min(anchor_count * 0.04, 0.20)
+    final_confidence = min(evidence_score + anchor_bonus, 0.99)
+    # Never drop below the disambiguate score (it's a floor, not a ceiling)
+    disambig_confidence = state.get("confidence_score", 0)
+    profile["confidence_score"] = round(max(final_confidence, disambig_confidence), 3)
 
     if "reputation_score" not in profile:
         profile["reputation_score"] = enrichment.get("source_diversity", 0.5)

@@ -27,3 +27,11 @@ class AgentState(TypedDict):
     person_profile: Optional[dict]
     cost_tracker: dict
     status: str
+    # Iterative enrichment fields
+    iteration: int                       # 0-based enrichment iteration count (max 3)
+    identity_anchors: list[str]          # confirmed companies/roles/locations used to filter results
+    filtered_results: list[dict]         # results that passed the identity filter
+    refinement_queries: list[dict]       # targeted queries generated from newly discovered facts
+    refinement_signals: list[str]        # signals (companies, platforms) driving the refinement round
+    executed_query_hashes: list[str]     # hashes of already-executed queries to avoid re-running
+    abort_reason: Optional[str]          # set when pipeline cannot confidently identify the person

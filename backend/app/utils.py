@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import random
 import ssl
 from functools import wraps
@@ -7,7 +8,14 @@ from functools import wraps
 import certifi
 import httpx
 
-_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+# Allow disabling SSL verification via env var (local dev only — never set in production)
+_DISABLE_SSL = os.environ.get("DISABLE_SSL_VERIFY", "").lower() in ("1", "true", "yes")
+if _DISABLE_SSL:
+    _SSL_CTX: ssl.SSLContext | bool = False
+    import urllib3
+    urllib3.disable_warnings()  # type: ignore[attr-defined]
+else:
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 logger = logging.getLogger(__name__)
 

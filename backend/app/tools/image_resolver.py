@@ -19,13 +19,13 @@ Identity problem (why we go wrong):
 Tiers (stops at first confirmed, identity+quality validated hit):
   1. In-memory structured data  — Apify LinkedIn profilePicUrl, GitHub avatar
                                   → ZERO extra API calls, most trustworthy
-  2. Apify LinkedIn scrape      — targeted scrape of the person's LinkedIn
-                                  profile to get profilePicUrl directly
-                                  → only fires when LinkedIn handle is known
-  3. Wikipedia REST API           — free, curated portrait for public figures
-  4. SerpAPI Knowledge Graph      — Google knowledge panel image
-  5. SerpAPI Google Images        — STRICT: only profile-displayphoto CDN URLs
-  6. SerpAPI organic thumbnail    — LinkedIn search result thumbnail only
+  2a. Firecrawl og:image scrape — extract og:image from the LinkedIn profile
+                                   page URL if we have one — no Apify needed
+  2b. Apify LinkedIn scrape     — fallback if Apify credits available
+  3. Wikipedia REST API         — free, curated portrait for public figures
+  4. SerpAPI Knowledge Graph    — Google knowledge panel image
+  5. SerpAPI Google Images      — STRICT: only profile-displayphoto CDN URLs
+  6. SerpAPI organic thumbnail  — LinkedIn search result thumbnail only
 
 Quality gates applied to every candidate URL:
   - HTTP 200 + Content-Type: image/*
@@ -133,20 +133,25 @@ async def resolve_profile_image(
     # Pull what we already know from in-memory data
     linkedin_handle = _extract_linkedin_handle(results)
 
+    # Extract LinkedIn profile URL from search results for Firecrawl
+    linkedin_profile_url = _extract_linkedin_profile_url(results)
+
     tiers: list[tuple[str, asyncio.coroutine]] = [
-        # T1: profilePicUrl already in Apify structured data — free, identity-safe
-        ("T1-structured",      _async(lambda: _extract_from_sources(results))),
-        # T2: Apify LinkedIn scrape — get profilePicUrl directly from the profile
-        #     Only fires when we have a confirmed LinkedIn handle (most precise)
-        ("T2-apify-linkedin",  _apify_linkedin_pic(name, company, linkedin_handle, results)),
+        # T1: profilePicUrl already in structured data — free, identity-safe
+        ("T1-structured",          _async(lambda: _extract_from_sources(results))),
+        # T2a: Firecrawl og:image — scrape LinkedIn profile page for og:image tag
+        #      Works without Apify credits; identity-safe (right profile URL)
+        ("T2a-firecrawl-og",       _firecrawl_og_image(linkedin_profile_url)),
+        # T2b: Apify LinkedIn scrape — richer data, only fires if Apify available
+        ("T2b-apify-linkedin",     _apify_linkedin_pic(name, company, linkedin_handle, results)),
         # T3: Wikipedia — free, curated, almost always a headshot of the right person
-        ("T3-wikipedia",       _wikipedia_image(name)),
+        ("T3-wikipedia",           _wikipedia_image(name)),
         # T4: Google Knowledge Graph panel image — famous/public figures only
-        ("T4-serp-kg",         _serpapi_knowledge_graph(name, company)),
+        ("T4-serp-kg",             _serpapi_knowledge_graph(name, company)),
         # T5: Google Images — STRICT: only profile-displayphoto CDN URLs accepted
-        ("T5-gimg-name",       _serpapi_gimg_name(name, company)),
+        ("T5-gimg-name",           _serpapi_gimg_name(name, company)),
         # T6: LinkedIn organic search thumbnail — last resort
-        ("T6-serp-organic",    _serpapi_organic_thumbnail(name, company)),
+        ("T6-serp-organic",        _serpapi_organic_thumbnail(name, company)),
     ]
 
     for label, coro in tiers:
@@ -297,6 +302,7 @@ def _extract_from_sources(results: list[dict]) -> str | None:
 
         if source_type == "linkedin_profile":
             for key in (
+                "photo",  # HarvestAPI
                 "profilePicUrl", "profilePicUrlEncoded", "imgUrl",
                 "photoUrl", "profileImage", "profileImageUrl",
                 "pictureUrl", "picture", "avatarUrl",
@@ -332,8 +338,108 @@ def _extract_linkedin_handle(results: list[dict]) -> str | None:
     return None
 
 
+def _extract_linkedin_profile_url(results: list[dict]) -> str | None:
+    """
+    Return the full LinkedIn profile URL from search results.
+    Prefers sources with source_type=linkedin_profile and high relevance.
+    """
+    best_url: str | None = None
+    best_score: float = -1.0
+
+    for r in results:
+        url = r.get("url", "")
+        if "linkedin.com/in/" not in url:
+            continue
+        # Prefer higher-confidence sources
+        score = float(r.get("relevance_score", r.get("confidence", 0.5)) or 0.5)
+        is_profile = r.get("source_type") == "linkedin_profile"
+        effective_score = score + (0.2 if is_profile else 0.0)
+        if effective_score > best_score:
+            best_score = effective_score
+            # Normalise URL: strip query params and trailing slashes
+            best_url = url.split("?")[0].rstrip("/")
+
+    return best_url
+
+
 # ---------------------------------------------------------------------------
-# Tier 2 — Apify LinkedIn profile scrape (identity-safe)
+# Tier 2a — Firecrawl og:image extraction (no Apify needed)
+# Scrapes the LinkedIn profile page and extracts the og:image meta tag.
+# This is identity-safe because we're reading from a known profile URL.
+# ---------------------------------------------------------------------------
+
+async def _firecrawl_og_image(linkedin_url: str | None) -> str | None:
+    """
+    Extract the og:image tag from a LinkedIn profile page using Firecrawl.
+
+    LinkedIn injects the profile photo as the og:image for the profile page,
+    which means we can get the profilePicUrl without Apify.
+
+    Only fires when a LinkedIn profile URL is known.
+    """
+    if not linkedin_url:
+        return None
+
+    try:
+        from app.config import get_settings
+        settings = get_settings()
+        firecrawl_key = getattr(settings, "firecrawl_api_key", None)
+        if not firecrawl_key:
+            return None
+
+        # Use AsyncFirecrawl to avoid blocking the event loop
+        from firecrawl import AsyncFirecrawl  # type: ignore
+        app = AsyncFirecrawl(api_key=firecrawl_key)
+
+        logger.info("[image] T2a-firecrawl: scraping %s for og:image", linkedin_url)
+
+        # Scrape LinkedIn profile page — request html + metadata formats for meta tags
+        result_raw = await app.scrape(linkedin_url, formats=["html", "metadata"])
+        result = result_raw if isinstance(result_raw, dict) else {}
+
+        # Extract og:image from metadata if available
+        metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        og_image = (
+            metadata.get("og:image")
+            or metadata.get("ogImage")
+            or metadata.get("image")
+        )
+
+        if og_image and isinstance(og_image, str) and og_image.startswith("http"):
+            logger.info("[image] T2a-firecrawl: found og:image for %s", linkedin_url)
+            return og_image
+
+        # Fallback: try to find og:image in raw HTML via regex
+        html = result.get("html", "") if isinstance(result, dict) else ""
+        if html:
+            og_match = re.search(
+                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+                html,
+                re.IGNORECASE,
+            )
+            if not og_match:
+                og_match = re.search(
+                    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                    html,
+                    re.IGNORECASE,
+                )
+            if og_match:
+                url = og_match.group(1).strip()
+                if url.startswith("http"):
+                    logger.info("[image] T2a-firecrawl: found og:image via HTML regex")
+                    return url
+
+    except Exception as exc:
+        logger.debug("[image] T2a-firecrawl failed for %s: %s", linkedin_url, exc)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 2b — Apify LinkedIn profile scrape (identity-safe)
+# Original Tier 2 — kept as fallback when Apify credits are available.
 # Scrapes the person's actual LinkedIn profile to get profilePicUrl directly.
 # Only runs when a LinkedIn handle is known (from existing sources or Apify search).
 # ---------------------------------------------------------------------------
@@ -388,7 +494,7 @@ async def _apify_linkedin_pic(
         logger.info(f"[image] T2-apify: scraping {profile_url} for {name!r}")
 
         # Step 2: Scrape the profile with Apify LinkedIn Profile Scraper
-        run_url = "https://api.apify.com/v2/acts/dev_fusion~linkedin-profile-scraper/runs"
+        run_url = "https://api.apify.com/v2/acts/dataweave~linkedin-profile-scraper/runs"
         payload = {
             "profileUrls": [profile_url],
             "maxProfiles": 1,

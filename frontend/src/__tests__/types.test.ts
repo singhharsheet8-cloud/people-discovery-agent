@@ -17,6 +17,7 @@ describe("Type contracts", () => {
       linkedin_url: "",
       twitter_handle: "",
       github_username: "",
+      instagram_handle: "",
       context: "",
     };
     expect(req.name).toBe("Test Person");

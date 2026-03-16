@@ -1,10 +1,19 @@
 import logging
+import ssl
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from passlib.hash import bcrypt
 
 from app.config import get_settings
+
+# asyncpg SSL context for Supabase pooler.
+# Supabase's *.pooler.supabase.com cert is not standards compliant, so we
+# skip cert verification for DB connections only.  OpenAI TLS is fixed
+# separately in embeddings.py via a truststore.SSLContext on the httpx client.
+_pg_ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_pg_ssl_ctx.check_hostname = False
+_pg_ssl_ctx.verify_mode = ssl.CERT_NONE
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +59,7 @@ def get_engine():
             "echo": settings.log_level.upper() == "DEBUG",
         }
         if "postgresql" in database_url:
-            connect_args: dict = {"ssl": "require"}
+            connect_args: dict = {"ssl": _pg_ssl_ctx}
             # PgBouncer in transaction mode doesn't support prepared statements;
             # disable asyncpg's statement cache to avoid "prepared statement does
             # not exist" errors.

@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
+import httpx
 from pydantic_settings import BaseSettings
+
+_DISABLE_SSL = os.environ.get("DISABLE_SSL_VERIFY", "").lower() in ("1", "true", "yes")
+
+
+def _ssl_kwargs() -> dict:
+    """Return http_async_client kwarg for ChatOpenAI when SSL is disabled."""
+    if not _DISABLE_SSL:
+        return {}
+    return {"http_async_client": httpx.AsyncClient(verify=False)}
 
 
 class Settings(BaseSettings):
@@ -13,6 +24,7 @@ class Settings(BaseSettings):
     github_token: str = ""
 
     # Additional API keys for discovery sources
+    harvestapi_api_key: str = ""  # HarvestAPI — structured LinkedIn data (exact dates, skills, recommendations)
     apify_api_key: str = ""
     firecrawl_api_key: str = ""
     serpapi_api_key: str = ""
@@ -132,6 +144,7 @@ def get_planning_llm(temperature: float = 0, max_tokens: int = 2048):
     }
     if base_url:
         kwargs["base_url"] = base_url
+    kwargs.update(_ssl_kwargs())
     return ChatOpenAI(**kwargs)
 
 
@@ -161,6 +174,7 @@ def get_reasoning_llm(temperature: float = 0, max_tokens: int = 2048):
     }
     if base_url:
         kwargs["base_url"] = base_url
+    kwargs.update(_ssl_kwargs())
     return ChatOpenAI(**kwargs)
 
 
@@ -177,6 +191,7 @@ def get_fallback_planning_llm(temperature: float = 0, max_tokens: int = 2048):
         temperature=temperature,
         max_tokens=max_tokens,
         model_kwargs={"response_format": {"type": "json_object"}},
+        **_ssl_kwargs(),
     )
 
 
@@ -221,6 +236,7 @@ def get_synthesis_llm():
             max_tokens=4096,
             model_kwargs={"response_format": {"type": "json_object"}},
             default_headers=extra_headers or None,
+            **_ssl_kwargs(),
         )
 
     # ── Priority 2: OpenRouter for deepseek/ or other routed models ──────────
@@ -236,6 +252,7 @@ def get_synthesis_llm():
                 "HTTP-Referer": "https://people-discovery-agent.app",
                 "X-Title": "People Discovery Agent",
             },
+            **_ssl_kwargs(),
         )
 
     # ── Priority 3: DeepSeek direct ──────────────────────────────────────────
@@ -247,6 +264,7 @@ def get_synthesis_llm():
             temperature=0,
             max_tokens=4096,
             model_kwargs={"response_format": {"type": "json_object"}},
+            **_ssl_kwargs(),
         )
 
     # ── Priority 4: Anthropic Claude ─────────────────────────────────────────
@@ -271,4 +289,5 @@ def get_synthesis_llm():
         kwargs["temperature"] = 0
         kwargs["max_tokens"] = 4096
 
+    kwargs.update(_ssl_kwargs())
     return ChatOpenAI(**kwargs)

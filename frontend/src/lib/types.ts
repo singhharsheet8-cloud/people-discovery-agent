@@ -17,12 +17,18 @@ export interface PersonSource {
   url: string;
   title: string;
   raw_content?: string | null;
-  snippet?: string;
   structured_data?: Record<string, unknown> | null;
   confidence?: number;
   relevance_score: number;
   source_reliability?: number;
   fetched_at?: string;
+}
+
+export interface Recommendation {
+  recommender?: string;
+  text?: string;
+  relationship?: string;
+  date?: string;
 }
 
 export interface PersonProfile {
@@ -39,6 +45,11 @@ export interface PersonProfile {
   expertise?: string[];
   notable_work?: string[];
   career_timeline?: Array<Record<string, unknown>>;
+  skills?: string[];
+  projects?: string[];
+  recommendations?: (Recommendation | string)[];
+  followers_count?: number;
+  blog_url?: string;
   confidence_score: number;
   reputation_score?: number;
   status: string;

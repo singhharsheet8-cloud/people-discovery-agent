@@ -24,11 +24,16 @@ interface PublicProfile {
   company?: string;
   location?: string;
   bio?: string;
+  image_url?: string;
   education?: Array<Record<string, string>>;
   expertise?: string[];
   notable_work?: string[];
   career_timeline?: Array<Record<string, string>>;
   social_links?: Record<string, string>;
+  skills?: string[];
+  recommendations?: Array<{ text?: string; recommender?: string } | string>;
+  followers_count?: number;
+  blog_url?: string;
   confidence_score: number;
   sources: Array<{
     platform: string;
@@ -95,7 +100,22 @@ export default function PublicProfilePage() {
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden">
           <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 p-8 border-b border-white/10">
             <div className="flex items-start gap-4">
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-2xl font-bold text-white shrink-0">
+              {profile.image_url ? (
+                <img
+                  src={profile.image_url}
+                  alt={profile.name}
+                  className="w-16 h-16 rounded-full object-cover ring-2 ring-white/10 shadow-lg shrink-0"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                    const next = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (next) next.style.display = "flex";
+                  }}
+                />
+              ) : null}
+              <div
+                className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-2xl font-bold text-white shrink-0"
+                style={{ display: profile.image_url ? "none" : "flex" }}
+              >
                 {profile.name.charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">

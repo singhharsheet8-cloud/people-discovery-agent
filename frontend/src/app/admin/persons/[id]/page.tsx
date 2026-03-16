@@ -19,6 +19,17 @@ import {
   TrendingUp,
   Shield,
   MessageSquare,
+  GraduationCap,
+  Lightbulb,
+  Trophy,
+  Wrench,
+  MessageCircle,
+  Users,
+  BookOpen,
+  Globe,
+  Linkedin,
+  Twitter,
+  Github,
 } from "lucide-react";
 import {
   getPerson,
@@ -222,6 +233,20 @@ export default function PersonDetailPage() {
                   {person.location}
                 </span>
               )}
+              {person.followers_count ? (
+                <span className="flex items-center gap-1 text-xs">
+                  <Users size={12} />
+                  {person.followers_count.toLocaleString()} followers
+                </span>
+              ) : null}
+              {person.blog_url ? (
+                <a href={person.blog_url} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-brand-400 hover:text-brand-300 text-xs">
+                  <BookOpen size={12} />
+                  Blog
+                  <ExternalLink size={10} />
+                </a>
+              ) : null}
             </div>
             <span
               className={`inline-block mt-2 px-2 py-0.5 rounded text-xs font-medium ${confidenceColor(
@@ -344,6 +369,125 @@ export default function PersonDetailPage() {
           <p className="text-gray-300 whitespace-pre-wrap">{person.bio}</p>
         </div>
       )}
+
+      {/* Key Facts & Expertise & Skills & Education & Recommendations */}
+      {(() => {
+        const keyFacts = Array.isArray(person.key_facts) ? person.key_facts : [];
+        const expertise = Array.isArray(person.expertise) ? person.expertise : [];
+        const skills = Array.isArray(person.skills) ? person.skills : [];
+        const education = Array.isArray(person.education) ? person.education : [];
+        const recommendations = Array.isArray(person.recommendations) ? person.recommendations : [];
+        const socialLinks = (person.social_links ?? {}) as Record<string, string>;
+        const hasSections = keyFacts.length > 0 || expertise.length > 0 || skills.length > 0 || education.length > 0 || recommendations.length > 0 || Object.keys(socialLinks).length > 0;
+        const SOCIAL_ICONS: Record<string, React.ElementType> = { linkedin: Linkedin, twitter: Twitter, github: Github, x: Twitter, website: Globe, web: Globe };
+        if (!hasSections) return null;
+        return (
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6 space-y-5">
+            {keyFacts.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Lightbulb size={14} className="text-gray-500" />
+                  <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Key Facts</h3>
+                </div>
+                <ul className="space-y-1.5">
+                  {keyFacts.map((fact: string, i: number) => (
+                    <li key={i} className="text-sm text-gray-300 flex items-start gap-2">
+                      <span className="text-brand-400 mt-1 shrink-0">&#x2022;</span>
+                      {fact}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {expertise.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Trophy size={14} className="text-gray-500" />
+                  <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Expertise</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {expertise.map((item: string, i: number) => (
+                    <span key={i} className="px-2.5 py-1 rounded-full text-xs font-medium bg-brand-500/15 text-brand-300 border border-brand-500/20">{item}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {skills.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Wrench size={14} className="text-gray-500" />
+                  <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Skills</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {skills.map((item: string, i: number) => (
+                    <span key={i} className="px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/15 text-purple-300 border border-purple-500/20">{item}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {education.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <GraduationCap size={14} className="text-gray-500" />
+                  <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Education</h3>
+                </div>
+                <ul className="space-y-1">
+                  {education.map((edu: string, i: number) => (
+                    <li key={i} className="text-sm text-gray-300">{edu}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {recommendations.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <MessageCircle size={14} className="text-gray-500" />
+                  <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Recommendations ({recommendations.length})</h3>
+                </div>
+                <div className="space-y-3">
+                  {recommendations.map((rec: unknown, i: number) => {
+                    const isObj = typeof rec === "object" && rec !== null;
+                    const text = isObj ? (rec as { text?: string }).text : String(rec);
+                    const recommender = isObj
+                      ? (rec as { recommender?: string; recommender_name?: string }).recommender
+                        ?? (rec as { recommender_name?: string }).recommender_name
+                      : undefined;
+                    if (!text) return null;
+                    return (
+                      <div key={i} className="bg-white/[0.03] rounded-lg p-3 border border-white/5">
+                        <p className="text-sm text-gray-300 italic leading-relaxed">
+                          &ldquo;{text.length > 300 ? text.slice(0, 300) + "..." : text}&rdquo;
+                        </p>
+                        {recommender && <p className="text-xs text-gray-500 mt-2">&mdash; {recommender}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {Object.keys(socialLinks).length > 0 && (
+              <div>
+                <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Social Links</h3>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(socialLinks)
+                    .filter(([, url]) => url != null && typeof url === "string" && url.length > 0)
+                    .map(([platform, url]) => {
+                      const Icon = SOCIAL_ICONS[platform.toLowerCase()] ?? Globe;
+                      return (
+                        <a key={platform} href={url} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/5 transition-colors">
+                          <Icon size={16} />
+                          {platform}
+                          <ExternalLink size={12} />
+                        </a>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Tabbed source viewer */}
       {Array.isArray(person.sources) && person.sources.length > 0 && (

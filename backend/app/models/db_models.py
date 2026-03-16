@@ -91,6 +91,11 @@ class Person(Base):
     expertise: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     notable_work: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     career_timeline: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    skills: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of skill strings
+    projects: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of project dicts
+    recommendations: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of recommendation dicts
+    followers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blog_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
     reputation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -108,7 +113,8 @@ class Person(Base):
         if self.name and not self.name_key:
             self.name_key = compute_name_key(self.name)
 
-    _json_fields = ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline")
+    _json_fields = ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline",
+                    "skills", "projects", "recommendations")
 
     def set_json(self, field: str, value: Any) -> None:
         if field not in self._json_fields:

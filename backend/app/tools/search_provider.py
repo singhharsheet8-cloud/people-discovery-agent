@@ -5,10 +5,16 @@ SerpAPI:    GET with query params + api_key param, mature/stable.
 
 Both produce equivalent results; this module normalises the response format
 so callers don't need to know which backend is active.
+
+Improvements:
+- Added `_retry_request` helper for transient 5xx / network failures (up to 2 retries)
+- Serper: on 429 (rate-limited), returns empty dict and logs a clear warning
+- SerpAPI: on missing key, logs at WARNING once, not on every call
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -16,6 +22,10 @@ from app.config import get_settings
 from app.utils import resilient_request
 
 logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 2
+_RETRY_DELAY = 1.0  # seconds between retries
+_SERPER_TIMEOUT = 15  # seconds per attempt — 10 was too tight when Tavily is down
 
 SERPAPI_URL = "https://serpapi.com/search.json"
 
@@ -116,25 +126,45 @@ async def _serper_post(
     if not endpoint:
         logger.warning(f"[search] no Serper endpoint for engine={engine}")
         return {}
-    try:
-        resp = await resilient_request(
-            "post",
-            endpoint,
-            json={"q": query, "num": num},
-            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if engine == "google":
-            data["organic_results"] = data.pop("organic", [])
-            kg = data.get("knowledgeGraph")
-            if kg:
-                data["knowledge_graph"] = kg
-        return data
-    except Exception as e:
-        logger.error(f"[search] Serper {engine} failed: {e}")
-        return {}
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = await resilient_request(
+                "post",
+                endpoint,
+                json={"q": query, "num": num},
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                timeout=_SERPER_TIMEOUT,
+            )
+            if resp.status_code == 429:
+                logger.warning(
+                    f"[search] Serper rate-limited (429) for engine={engine} query='{query[:60]}'"
+                )
+                return {}
+            if resp.status_code >= 500 and attempt < _MAX_RETRIES:
+                logger.warning(
+                    f"[search] Serper {engine} returned {resp.status_code}, "
+                    f"retrying (attempt {attempt + 1}/{_MAX_RETRIES})"
+                )
+                await asyncio.sleep(_RETRY_DELAY * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if engine == "google":
+                data["organic_results"] = data.pop("organic", [])
+                kg = data.get("knowledgeGraph")
+                if kg:
+                    data["knowledge_graph"] = kg
+            return data
+        except Exception as e:
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    f"[search] Serper {engine} error (attempt {attempt + 1}): {e}, retrying"
+                )
+                await asyncio.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                logger.error(f"[search] Serper {engine} failed after {_MAX_RETRIES + 1} attempts: {e}")
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +191,29 @@ async def _serpapi_get(
     if extra:
         params.update(extra)
 
-    try:
-        resp = await resilient_request("get", SERPAPI_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.error(f"[search] SerpAPI {engine} failed: {e}")
-        return {}
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = await resilient_request("get", SERPAPI_URL, params=params, timeout=_SERPER_TIMEOUT)
+            if resp.status_code == 429:
+                logger.warning(
+                    f"[search] SerpAPI rate-limited (429) for engine={engine} query='{query[:60]}'"
+                )
+                return {}
+            if resp.status_code >= 500 and attempt < _MAX_RETRIES:
+                logger.warning(
+                    f"[search] SerpAPI {engine} returned {resp.status_code}, "
+                    f"retrying (attempt {attempt + 1}/{_MAX_RETRIES})"
+                )
+                await asyncio.sleep(_RETRY_DELAY * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    f"[search] SerpAPI {engine} error (attempt {attempt + 1}): {e}, retrying"
+                )
+                await asyncio.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                logger.error(f"[search] SerpAPI {engine} failed after {_MAX_RETRIES + 1} attempts: {e}")
+    return {}

@@ -162,6 +162,7 @@ async def create_list(
         "name": lst.name,
         "description": lst.description,
         "color": lst.color,
+        "person_count": 0,
         "created_at": _iso(lst.created_at),
         "updated_at": _iso(lst.updated_at),
     }
@@ -186,6 +187,13 @@ async def update_list(
             setattr(lst, k, v)
         await session.commit()
         await session.refresh(lst)
+        person_count = (
+            await session.execute(
+                select(func.count()).select_from(PersonListItem).where(
+                    PersonListItem.list_id == list_id
+                )
+            )
+        ).scalar() or 0
     await log_audit(
         user_email=_admin.get("sub", ""),
         action="update",
@@ -199,6 +207,7 @@ async def update_list(
         "name": lst.name,
         "description": lst.description,
         "color": lst.color,
+        "person_count": person_count,
         "created_at": _iso(lst.created_at),
         "updated_at": _iso(lst.updated_at),
     }
@@ -388,6 +397,7 @@ async def create_note(
         await session.refresh(note)
     return {
         "id": note.id,
+        "person_id": note.person_id,
         "content": note.content,
         "created_at": _iso(note.created_at),
         "updated_at": _iso(note.updated_at),
@@ -412,6 +422,7 @@ async def update_note(
         await session.refresh(note)
     return {
         "id": note.id,
+        "person_id": note.person_id,
         "content": note.content,
         "created_at": _iso(note.created_at),
         "updated_at": _iso(note.updated_at),
@@ -452,7 +463,12 @@ async def get_person_tags(
             select(PersonTag).where(PersonTag.person_id == person_id).order_by(PersonTag.tag)
         )
         tags = result.scalars().all()
-        return {"tags": [t.tag for t in tags]}
+        return {
+            "tags": [
+                {"tag": t.tag, "created_at": _iso(t.created_at)}
+                for t in tags
+            ]
+        }
 
 
 @router.post("/persons/{person_id}/tags")
@@ -486,7 +502,7 @@ async def add_tags(
                 session.add(PersonTag(person_id=person_id, tag=tag))
                 added.append(tag)
         await session.commit()
-    return {"added": added}
+    return {"added": len(added)}
 
 
 @router.delete("/persons/{person_id}/tags/{tag}")
@@ -523,7 +539,7 @@ async def list_all_tags(_admin: dict = Depends(require_admin)):
         )
         rows = result.all()
         return {
-            "items": [{"tag": r[0], "person_count": r[1]} for r in rows]
+            "items": [{"tag": r[0], "count": r[1]} for r in rows]
         }
 
 
@@ -634,12 +650,18 @@ async def get_public_profile(share_token: str):
             "company": person.company,
             "location": person.location,
             "bio": person.bio,
+            "image_url": person.image_url,
             "education": person.get_json("education"),
             "key_facts": person.get_json("key_facts"),
             "social_links": person.get_json("social_links"),
             "expertise": person.get_json("expertise"),
             "notable_work": person.get_json("notable_work"),
             "career_timeline": person.get_json("career_timeline"),
+            "skills": person.get_json("skills"),
+            "projects": person.get_json("projects"),
+            "recommendations": person.get_json("recommendations"),
+            "followers_count": person.followers_count,
+            "blog_url": person.blog_url,
             "confidence_score": person.confidence_score,
             "reputation_score": person.reputation_score,
             "sources": [

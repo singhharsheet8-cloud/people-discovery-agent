@@ -12,6 +12,10 @@ import {
   Twitter,
   Github,
   Globe,
+  Wrench,
+  MessageCircle,
+  Users,
+  BookOpen,
 } from "lucide-react";
 import type { PersonProfile as ProfileType } from "@/lib/types";
 import { confidenceLabel, confidenceColor } from "@/lib/utils";
@@ -36,6 +40,8 @@ export function PersonProfile({ profile }: PersonProfileProps) {
   const expertise = profile.expertise ?? [];
   const education = profile.education ?? [];
   const notableWork = profile.notable_work ?? [];
+  const skills = profile.skills ?? [];
+  const recommendations = profile.recommendations ?? [];
   const socialLinks = profile.social_links ?? {};
   const sources = profile.sources ?? [];
 
@@ -97,6 +103,28 @@ export function PersonProfile({ profile }: PersonProfileProps) {
                   <span className="text-sm">{profile.location}</span>
                 </div>
               )}
+              {(profile.followers_count || profile.blog_url) && (
+                <div className="flex items-center gap-3 mt-1">
+                  {profile.followers_count ? (
+                    <span className="flex items-center gap-1 text-gray-400 text-xs">
+                      <Users size={12} />
+                      {profile.followers_count.toLocaleString()} followers
+                    </span>
+                  ) : null}
+                  {profile.blog_url ? (
+                    <a
+                      href={profile.blog_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-brand-400 hover:text-brand-300 text-xs"
+                    >
+                      <BookOpen size={12} />
+                      Blog
+                      <ExternalLink size={10} />
+                    </a>
+                  ) : null}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -151,6 +179,22 @@ export function PersonProfile({ profile }: PersonProfileProps) {
           </Section>
         )}
 
+        {/* Skills */}
+        {skills.length > 0 && (
+          <Section title="Skills" icon={Wrench}>
+            <div className="flex flex-wrap gap-2">
+              {skills.map((skill, i) => (
+                <span
+                  key={i}
+                  className="px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/15 text-purple-300 border border-purple-500/20"
+                >
+                  {skill}
+                </span>
+              ))}
+            </div>
+          </Section>
+        )}
+
         {/* Education */}
         {education.length > 0 && (
           <Section title="Education" icon={GraduationCap}>
@@ -174,6 +218,36 @@ export function PersonProfile({ profile }: PersonProfileProps) {
                 </li>
               ))}
             </ul>
+          </Section>
+        )}
+
+        {/* Recommendations */}
+        {recommendations.length > 0 && (
+          <Section title="Recommendations" icon={MessageCircle}>
+            <div className="space-y-3">
+              {recommendations.map((rec, i) => {
+                const isObj = typeof rec === "object" && rec !== null;
+                const text = isObj ? (rec as { text?: string }).text : String(rec);
+                const recommender = isObj
+                  ? (rec as { recommender?: string; recommender_name?: string }).recommender
+                    ?? (rec as { recommender_name?: string }).recommender_name
+                  : undefined;
+                if (!text) return null;
+                return (
+                  <div
+                    key={i}
+                    className="bg-white/[0.03] rounded-lg p-3 border border-white/5"
+                  >
+                    <p className="text-sm text-gray-300 italic leading-relaxed">
+                      &ldquo;{text.length > 300 ? text.slice(0, 300) + "..." : text}&rdquo;
+                    </p>
+                    {recommender && (
+                      <p className="text-xs text-gray-500 mt-2">— {recommender}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </Section>
         )}
 
