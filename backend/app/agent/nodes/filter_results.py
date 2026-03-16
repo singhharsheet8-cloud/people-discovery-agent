@@ -88,7 +88,7 @@ def _result_matches_identity(
         return False
 
     # --- DEFAULT tier (web, linkedin, twitter, news, firecrawl, etc.) ---
-    if rel_score >= SCORE_ONLY_THRESHOLD:
+    if rel_score >= SCORE_ONLY_THRESHOLD and name_present:
         return True
     if rel_score >= ANCHOR_RELEVANCE_THRESHOLD and has_anchor:
         return True
@@ -103,7 +103,7 @@ async def filter_by_identity(state: AgentState) -> dict[str, Any]:
     """
     search_results: list[dict] = state.get("search_results", [])
     identity_anchors: list[str] = state.get("identity_anchors", [])
-    input_data: dict = state.get("input_data", {})
+    input_data: dict = state.get("input", {})
     person_name: str = input_data.get("name", "")
 
     passed: list[dict] = []

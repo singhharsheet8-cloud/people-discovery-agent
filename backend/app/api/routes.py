@@ -381,10 +381,28 @@ async def _run_discovery(job_id: str, input_data: dict):
 
         result = await graph.ainvoke(initial_state)
         profile = result.get("person_profile", {})
+
+        _MIN_SAVE_CONFIDENCE = 0.35
+        profile_confidence = float(profile.get("confidence_score", 0))
+        if profile.get("abort_reason") or profile_confidence < _MIN_SAVE_CONFIDENCE:
+            logger.warning(
+                "Profile for %s rejected (confidence=%.3f, abort=%s) — not saving to DB",
+                input_data.get("name"), profile_confidence, profile.get("abort_reason"),
+            )
+            async with factory() as session:
+                job_row = (await session.execute(
+                    select(DiscoveryJob).where(DiscoveryJob.id == job_id)
+                )).scalar_one_or_none()
+                if job_row:
+                    job_row.status = "failed"
+                    job_row.completed_at = datetime.now(timezone.utc)
+                    job_row.latency_ms = (time.time() - start_time) * 1000
+                await session.commit()
+            return
+
         sentiment = result.get("sentiment", {})
         if sentiment:
             profile["sentiment"] = sentiment
-        # Carry image_url from enrichment stage into the profile dict
         enrichment = result.get("enrichment", {})
         if enrichment.get("image_url") and not profile.get("image_url"):
             profile["image_url"] = enrichment["image_url"]
@@ -483,7 +501,7 @@ async def _run_discovery(job_id: str, input_data: dict):
                 )).all()
                 existing_keys = {(row[0] or "", row[1] or "") for row in existing_sources}
 
-            _SOURCE_RELEVANCE_FLOOR = 0.25
+            _SOURCE_RELEVANCE_FLOOR = 0.45
             new_keys: set[tuple[str, str]] = set()
             for source in profile.get("sources", []):
                 url = source.get("url", "")

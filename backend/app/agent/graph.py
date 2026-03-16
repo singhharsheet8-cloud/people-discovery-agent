@@ -49,6 +49,9 @@ iterative_enrich  ◄───────────────────�
   synthesize_profile     — final JSON profile
         │
         ▼
+  verify_profile         — strip hallucinated facts/career not in sources
+        │
+        ▼
        END
 
 Why the refinement loop goes through filter+analyze+enrich again
@@ -78,6 +81,7 @@ from app.agent.nodes.iterative_enrich import iterative_enrich
 from app.agent.nodes.generate_targeted_queries import generate_targeted_queries
 from app.agent.nodes.sentiment import analyze_sentiment
 from app.agent.nodes.synthesizer import synthesize_profile
+from app.agent.nodes.verify_profile import verify_profile
 
 logger = logging.getLogger(__name__)
 
@@ -148,9 +152,10 @@ def build_graph() -> StateGraph:
     builder.add_node("iterative_enrich", iterative_enrich)
     builder.add_node("generate_targeted_queries", generate_targeted_queries)
 
-    # ── Synthesis ──
+    # ── Synthesis + Verification ──
     builder.add_node("analyze_sentiment", analyze_sentiment)
     builder.add_node("synthesize_profile", synthesize_profile)
+    builder.add_node("verify_profile", verify_profile)
 
     # ── Edges ──
 
@@ -195,9 +200,10 @@ def build_graph() -> StateGraph:
     #    before iterative_enrich makes its next decision.
     builder.add_edge("generate_targeted_queries", "filter_results")
 
-    # 8. Synthesis
+    # 8. Synthesis → verification → end
     builder.add_edge("analyze_sentiment", "synthesize_profile")
-    builder.add_edge("synthesize_profile", END)
+    builder.add_edge("synthesize_profile", "verify_profile")
+    builder.add_edge("verify_profile", END)
 
     return builder
 
