@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from pgvector.sqlalchemy import Vector
 
-Vector.get_col_spec = lambda self: "TEXT"
+Vector.get_col_spec = lambda self, **kw: "TEXT"
 
 from app.db import Base, get_session_factory
 from app.main import app

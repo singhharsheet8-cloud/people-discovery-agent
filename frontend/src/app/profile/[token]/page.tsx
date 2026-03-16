@@ -137,6 +137,18 @@ export default function PublicProfilePage() {
                     <Star size={14} className="text-yellow-500" />
                     {Math.round(profile.confidence_score * 100)}% confidence
                   </span>
+                  {profile.followers_count ? (
+                    <span className="flex items-center gap-1 text-sm text-gray-400">
+                      <User size={14} />
+                      {profile.followers_count.toLocaleString()} followers
+                    </span>
+                  ) : null}
+                  {profile.blog_url ? (
+                    <a href={profile.blog_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300">
+                      <ExternalLink size={14} />
+                      Blog
+                    </a>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -167,6 +179,21 @@ export default function PublicProfilePage() {
               </section>
             )}
 
+            {profile.skills && profile.skills.length > 0 && (
+              <section>
+                <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                  <Star size={18} /> Skills
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {profile.skills.map((skill, i) => (
+                    <span key={i} className="px-3 py-1 rounded-full bg-purple-500/10 text-purple-400 text-sm border border-purple-500/20">
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {profile.education && profile.education.length > 0 && (
               <section>
                 <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
@@ -185,6 +212,33 @@ export default function PublicProfilePage() {
             {profile.career_timeline && profile.career_timeline.length > 0 && (
               <section>
                 <CareerTimeline timeline={profile.career_timeline} />
+              </section>
+            )}
+
+            {profile.recommendations && profile.recommendations.length > 0 && (
+              <section>
+                <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                  <User size={18} /> Recommendations
+                </h2>
+                <div className="space-y-3">
+                  {profile.recommendations.map((rec, i) => {
+                    const isObj = typeof rec === "object" && rec !== null;
+                    const text = isObj ? (rec as { text?: string }).text : String(rec);
+                    const recommender = isObj
+                      ? (rec as { recommender?: string; recommender_name?: string }).recommender
+                        ?? (rec as { recommender_name?: string }).recommender_name
+                      : undefined;
+                    if (!text) return null;
+                    return (
+                      <div key={i} className="bg-white/[0.03] rounded-lg p-4 border border-white/5">
+                        <p className="text-sm text-gray-300 italic leading-relaxed">
+                          &ldquo;{text.length > 300 ? text.slice(0, 300) + "..." : text}&rdquo;
+                        </p>
+                        {recommender && <p className="text-xs text-gray-500 mt-2">&mdash; {recommender}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
               </section>
             )}
 

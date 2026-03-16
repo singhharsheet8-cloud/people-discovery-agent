@@ -40,7 +40,9 @@ import logging
 from typing import Any
 
 from app.agent.state import AgentState
+from app.tools.google_news_search import search_google_news
 from app.tools.source_scorer import score_sources
+from app.tools.tavily_search import search_tavily
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,6 @@ async def _run_query(query_str: str, search_type: str) -> list[dict]:
     """Execute a single targeted search query with timeout."""
     try:
         if search_type == "news":
-            from app.tools.google_news_search import search_google_news
             results = await asyncio.wait_for(search_google_news(query_str), timeout=SEARCH_TIMEOUT)
             return [r if isinstance(r, dict) else r.model_dump() for r in results or []]
 
@@ -175,7 +176,6 @@ async def _run_query(query_str: str, search_type: str) -> list[dict]:
 
         else:
             # web / default → Tavily
-            from app.tools.tavily_search import search_tavily
             results = await asyncio.wait_for(
                 search_tavily(query_str, search_type="web", max_results=5),
                 timeout=SEARCH_TIMEOUT,
