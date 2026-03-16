@@ -720,24 +720,13 @@ async def get_job(job_id: str, _auth=Depends(require_api)):
 # --- Persons CRUD ---
 
 
-@router.get("/persons/semantic-search")
-async def semantic_search_persons(
-    q: str = Query(..., min_length=2, max_length=500, description="Natural language query"),
-    limit: int = Query(10, ge=1, le=50),
-    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="Minimum cosine similarity (0–1)"),
-    _auth=Depends(require_api),
-):
-    """
-    Semantic search over persons using vector similarity.
+class SemanticSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=500, description="Natural language query")
+    limit: int = Field(10, ge=1, le=50)
+    min_similarity: float = Field(0.0, ge=0.0, le=1.0, description="Minimum cosine similarity (0–1)")
 
-    Returns persons whose profiles are semantically closest to *q*.
-    Each result includes a ``similarity`` score (0–1, higher is better).
 
-    Requires:
-    - pgvector extension enabled on the database.
-    - Persons must have embeddings generated (they are created automatically
-      after each discovery run; use the backfill script for existing records).
-    """
+async def _run_semantic_search(q: str, limit: int, min_similarity: float):
     from app.embeddings import semantic_search
 
     factory = get_session_factory()
@@ -746,6 +735,26 @@ async def semantic_search_persons(
             session, query=q, limit=limit, min_similarity=min_similarity
         )
     return {"results": results, "count": len(results), "query": q}
+
+
+@router.post("/persons/semantic-search")
+async def semantic_search_persons_post(
+    request: SemanticSearchRequest,
+    _auth=Depends(require_api),
+):
+    """Semantic search via POST body — type your query in JSON."""
+    return await _run_semantic_search(request.query, request.limit, request.min_similarity)
+
+
+@router.get("/persons/semantic-search")
+async def semantic_search_persons(
+    q: str = Query(..., min_length=2, max_length=500, description="Natural language query"),
+    limit: int = Query(10, ge=1, le=50),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="Minimum cosine similarity (0–1)"),
+    _auth=Depends(require_api),
+):
+    """Semantic search via query params (GET)."""
+    return await _run_semantic_search(q, limit, min_similarity)
 
 
 @router.get("/persons")
