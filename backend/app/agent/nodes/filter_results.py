@@ -74,25 +74,21 @@ def _result_matches_identity(
     rel_score = float(result.get("relevance_score", result.get("confidence", 0)) or 0)
 
     # Extra gate for namesake-prone source types: require an anchor match
-    # regardless of score, unless the LLM explicitly marked it CORRECT
+    # regardless of score, unless the LLM explicitly marked it CORRECT.
+    # Scholar/academic are the highest-risk for namesakes (common names
+    # appear in unrelated research papers), so they ALWAYS require an anchor.
     if stype in _NAMESAKE_PRONE_TYPES:
         text = (
             (result.get("title") or "") + " " + (result.get("content") or "")
         ).lower()
+        has_anchor = anchors and any(a.lower() in text for a in anchors)
 
-        # Reject academic results that mention student/university signals
-        # but none of the identity anchors (company, role keywords)
         if stype in ("scholar", "academic"):
-            has_academic_signal = any(sig in text for sig in _ACADEMIC_INSTITUTION_SIGNALS)
-            has_anchor = anchors and any(a.lower() in text for a in anchors)
-            if has_academic_signal and not has_anchor:
-                return False
-
-        # For medium/reddit/patent/stackoverflow, require at least one anchor or high relevance
-        if stype in ("medium", "reddit", "patent", "stackoverflow") and rel_score < SCORE_ONLY_THRESHOLD:
-            has_anchor = anchors and any(a.lower() in text for a in anchors)
             if not has_anchor:
                 return False
+
+        elif rel_score < SCORE_ONLY_THRESHOLD and not has_anchor:
+            return False
 
     # Gate 2b: high scorer passes without anchor check
     if rel_score >= SCORE_ONLY_THRESHOLD:
