@@ -26,6 +26,7 @@ async def search_google_news(query: str, max_results: int = 5) -> list[dict]:
         data = await google_news(query, num=max_results + 5)
         raw_items = data.get("news_results", [])
 
+        name_parts = [p for p in query.lower().split() if len(p) > 2]
         results: list[dict] = []
         seen_urls: set[str] = set()
 
@@ -34,9 +35,15 @@ async def search_google_news(query: str, max_results: int = 5) -> list[dict]:
             link = item.get("link", item.get("url", ""))
             if not link or link in seen_urls:
                 continue
-            seen_urls.add(link)
 
             snippet = item.get("snippet", item.get("description", ""))
+
+            # Name verification: title or snippet must mention the person
+            searchable = f"{title} {snippet}".lower()
+            if name_parts and not all(p in searchable for p in name_parts):
+                continue
+
+            seen_urls.add(link)
             # `source` can be a dict {"name": "..."} or a plain string
             source_raw = item.get("source", "")
             if isinstance(source_raw, dict):

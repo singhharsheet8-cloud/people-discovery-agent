@@ -1,24 +1,19 @@
 """
-Identity-based result filter node.
+Identity-based result filter — the **last line of defence** against
+wrong-person data reaching the synthesiser / DB.
 
-Runs after disambiguate_identity. Takes all search results annotated with
-`disambiguation_label` (CORRECT | UNCERTAIN | WRONG_PERSON) and applies a
-two-gate filter:
+Every UNCERTAIN result must prove it belongs to the target person by
+mentioning at least one *identity anchor* (company, role keyword, etc.)
+in its text.  Only the LLM's explicit CORRECT label can bypass this.
 
-Gate 1 — Disambiguation label
-    WRONG_PERSON → always dropped (the LLM said it's a namesake)
-    CORRECT → always kept
-    UNCERTAIN → evaluated by Gate 2
+Source-type tiers (strictness):
 
-Gate 2 — Anchor + score check (for UNCERTAIN results)
-    A result passes if it meets EITHER condition:
-      a) Its content/title mentions at least one identity anchor, AND
-         its relevance_score >= ANCHOR_RELEVANCE_THRESHOLD
-      b) Its relevance_score >= SCORE_ONLY_THRESHOLD (high-confidence scorer)
-
-Results that fail both gates are logged and dropped.
-The filtered list is stored in `state.filtered_results` AND overwrites
-`state.search_results` so all downstream nodes automatically see clean data.
+  STRICT  — scholar, academic, patent: ALWAYS require an anchor.
+  MEDIUM  — medium, reddit, stackoverflow, crunchbase, github,
+            google_news, youtube_transcript, youtube: require an
+            anchor unless the LLM scorer gave ≥ 0.75.
+  DEFAULT — web, linkedin_*, twitter, firecrawl, news: require an
+            anchor when relevance < 0.65 (original behaviour).
 """
 
 from __future__ import annotations
@@ -30,39 +25,34 @@ from app.agent.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-# Minimum relevance score required when an anchor is also present in the text
 ANCHOR_RELEVANCE_THRESHOLD: float = 0.45
-
-# Minimum relevance score to keep a result even without an anchor match
 SCORE_ONLY_THRESHOLD: float = 0.65
+HIGH_CONFIDENCE_THRESHOLD: float = 0.75
 
+_STRICT_TYPES = {"scholar", "academic", "patent"}
 
-_NAMESAKE_PRONE_TYPES = {"scholar", "academic", "medium", "reddit", "patent", "stackoverflow"}
-
-# Institutions that signal a student/academic namesake (not an industry professional)
-_ACADEMIC_INSTITUTION_SIGNALS = {
-    "student", "institute of technology", "university", "college",
-    "department of", "vellore", "bms institute", "nift", "iit ",
-    "read 2 publications", "read 1 publication", "cited by",
+_MEDIUM_TYPES = {
+    "medium", "reddit", "stackoverflow", "crunchbase",
+    "github", "google_news", "youtube_transcript", "youtube",
 }
 
 
 def _result_matches_identity(
     result: dict,
     anchors: list[str],
+    person_name: str = "",
 ) -> bool:
-    """
-    Return True if a result passes identity validation.
+    """Return True if a result passes identity validation.
 
-    Gate logic:
-      1. CORRECT label  → pass immediately
-      2. WRONG_PERSON   → fail immediately
-      3. namesake_flag  → fail immediately
-      4. UNCERTAIN      → check anchor presence + relevance score
-      5. Namesake-prone sources (scholar/academic/medium) get extra scrutiny
+    Gate logic (evaluated top-down, first match wins):
+      1. CORRECT label   → pass
+      2. WRONG_PERSON    → fail
+      3. namesake_flag   → fail
+      4. STRICT types    → require anchor match (no score override)
+      5. MEDIUM types    → require anchor OR very high scorer (≥ 0.75)
+      6. DEFAULT types   → require anchor when score < 0.65
     """
     label = result.get("disambiguation_label", "UNCERTAIN")
-
     if label == "CORRECT":
         return True
     if label == "WRONG_PERSON":
@@ -72,35 +62,36 @@ def _result_matches_identity(
 
     stype = result.get("source_type", "web")
     rel_score = float(result.get("relevance_score", result.get("confidence", 0)) or 0)
+    text = (
+        (result.get("title") or "") + " " + (result.get("content") or "")
+    ).lower()
 
-    # Extra gate for namesake-prone source types: require an anchor match
-    # regardless of score, unless the LLM explicitly marked it CORRECT.
-    # Scholar/academic are the highest-risk for namesakes (common names
-    # appear in unrelated research papers), so they ALWAYS require an anchor.
-    if stype in _NAMESAKE_PRONE_TYPES:
-        text = (
-            (result.get("title") or "") + " " + (result.get("content") or "")
-        ).lower()
-        has_anchor = anchors and any(a.lower() in text for a in anchors)
+    has_anchor = anchors and any(a.lower() in text for a in anchors)
 
-        if stype in ("scholar", "academic"):
-            if not has_anchor:
-                return False
+    # Also check whether the person's name appears (basic sanity)
+    name_present = True
+    if person_name:
+        name_parts = [p for p in person_name.lower().split() if len(p) > 2]
+        if name_parts:
+            name_present = all(p in text for p in name_parts)
 
-        elif rel_score < SCORE_ONLY_THRESHOLD and not has_anchor:
-            return False
+    # --- STRICT tier: always require anchor ---
+    if stype in _STRICT_TYPES:
+        return bool(has_anchor)
 
-    # Gate 2b: high scorer passes without anchor check
+    # --- MEDIUM tier: anchor OR very-high-confidence scorer ---
+    if stype in _MEDIUM_TYPES:
+        if has_anchor:
+            return True
+        if rel_score >= HIGH_CONFIDENCE_THRESHOLD and name_present:
+            return True
+        return False
+
+    # --- DEFAULT tier (web, linkedin, twitter, news, firecrawl, etc.) ---
     if rel_score >= SCORE_ONLY_THRESHOLD:
         return True
-
-    # Gate 2a: moderate scorer must mention an anchor
-    if rel_score >= ANCHOR_RELEVANCE_THRESHOLD and anchors:
-        text = (
-            (result.get("title") or "") + " " + (result.get("content") or "")
-        ).lower()
-        if any(anchor.lower() in text for anchor in anchors):
-            return True
+    if rel_score >= ANCHOR_RELEVANCE_THRESHOLD and has_anchor:
+        return True
 
     return False
 
@@ -112,13 +103,15 @@ async def filter_by_identity(state: AgentState) -> dict[str, Any]:
     """
     search_results: list[dict] = state.get("search_results", [])
     identity_anchors: list[str] = state.get("identity_anchors", [])
+    input_data: dict = state.get("input_data", {})
+    person_name: str = input_data.get("name", "")
 
     passed: list[dict] = []
     dropped_wrong_person: list[str] = []
     dropped_uncertain: list[str] = []
 
     for r in search_results:
-        if _result_matches_identity(r, identity_anchors):
+        if _result_matches_identity(r, identity_anchors, person_name):
             passed.append(r)
         else:
             label = r.get("disambiguation_label", "UNCERTAIN")

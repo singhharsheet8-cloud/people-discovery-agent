@@ -40,6 +40,7 @@ async def search_crunchbase(query: str, max_results: int = 5) -> list[dict]:
         data = await google_search(f"site:crunchbase.com {query}", num=max_results + 3)
         organic = data.get("organic_results", [])
 
+        name_parts = [p for p in query.lower().split() if len(p) > 2]
         results: list[dict] = []
         seen_urls: set[str] = set()
         person_url: str | None = None
@@ -50,6 +51,12 @@ async def search_crunchbase(query: str, max_results: int = 5) -> list[dict]:
             snippet = item.get("snippet", item.get("description", ""))
             if not link or link in seen_urls:
                 continue
+
+            # Name verification: title or snippet must mention the person
+            searchable = f"{title} {snippet} {link}".lower()
+            if name_parts and not all(p in searchable for p in name_parts):
+                continue
+
             seen_urls.add(link)
 
             entry_type = _detect_entry_type(link)

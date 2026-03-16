@@ -36,8 +36,9 @@ async def search_scholar(
     try:
         data = await google_scholar(query, num=max_results)
         organic = data.get("organic_results", [])
+        name_parts = [p for p in person_name.lower().split() if len(p) > 2]
         results = []
-        for item in organic[:max_results]:
+        for item in organic:
             if not isinstance(item, dict):
                 continue
             title = item.get("title", "")
@@ -46,6 +47,12 @@ async def search_scholar(
             pub_info = item.get("publication_info", {})
             if not isinstance(pub_info, dict):
                 pub_info = {}
+
+            # Name verification: at least the person's name must appear
+            searchable = f"{title} {snippet} {pub_info.get('summary', '')}".lower()
+            if name_parts and not all(p in searchable for p in name_parts):
+                continue
+
             inline = item.get("inline_links", {})
             if not isinstance(inline, dict):
                 inline = {}
@@ -66,6 +73,8 @@ async def search_scholar(
                     },
                 }
             )
+            if len(results) >= max_results:
+                break
         await set_cached_results(cache_key, "scholar", results)
         return results
     except Exception as e:

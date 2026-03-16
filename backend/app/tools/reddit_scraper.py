@@ -103,6 +103,7 @@ async def _reddit_json_api(person_name: str, max_results: int) -> list[dict]:
         data = resp.json()
         children = data.get("data", {}).get("children", [])
 
+        name_parts = [p for p in person_name.lower().split() if len(p) > 2]
         results: list[dict] = []
         for child in children:
             post = child.get("data", {})
@@ -114,6 +115,11 @@ async def _reddit_json_api(person_name: str, max_results: int) -> list[dict]:
 
             # For link posts (no selftext), use title as content
             content = selftext if selftext and selftext != "[removed]" and selftext != "[deleted]" else title
+
+            # Name verification: title or content must mention the person
+            searchable = f"{title} {content}".lower()
+            if name_parts and not all(p in searchable for p in name_parts):
+                continue
 
             results.append({
                 "title": title,

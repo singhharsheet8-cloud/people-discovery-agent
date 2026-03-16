@@ -58,7 +58,17 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
         response.raise_for_status()
         data = response.json()
 
-        users = data.get("items", [])[:max_results]
+        # Pre-filter: only keep users whose login or display name overlaps
+        query_parts = [p for p in query.lower().split() if len(p) > 2]
+        raw_users = data.get("items", [])[:max_results * 3]
+        users = []
+        for u in raw_users:
+            login = (u.get("login") or "").lower()
+            if query_parts and any(p in login for p in query_parts):
+                users.append(u)
+            elif len(users) < max_results:
+                users.append(u)
+        users = users[:max_results]
 
         # Fetch profiles and repos in parallel
         profiles, repos_list = await asyncio.gather(

@@ -120,6 +120,12 @@ async def search_stackoverflow(person_name: str, max_results: int = 5) -> list[d
                     question_id = item.get("question_id", "")
                     answer_id = item.get("answer_id")
                     excerpt = item.get("excerpt", "")
+
+                    # Name verification for Q&A results
+                    searchable = f"{title} {excerpt}".lower()
+                    if not all(p in searchable for p in name_parts if len(p) > 2):
+                        continue
+
                     if answer_id:
                         link = f"https://stackoverflow.com/a/{answer_id}"
                     else:
@@ -175,12 +181,16 @@ async def _google_stackoverflow_fallback(person_name: str, max_results: int) -> 
         data = await google_search(
             f'site:stackoverflow.com "{person_name}"', num=max_results + 3
         )
+        name_parts = [p for p in person_name.lower().split() if len(p) > 2]
         results = []
         for item in data.get("organic_results", []):
             url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
             snippet = item.get("snippet", item.get("description", ""))
             if not url or "stackoverflow.com" not in url:
+                continue
+            searchable = f"{title} {snippet}".lower()
+            if name_parts and not all(p in searchable for p in name_parts):
                 continue
             results.append({
                 "title": title,

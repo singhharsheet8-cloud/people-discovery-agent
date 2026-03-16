@@ -153,6 +153,8 @@ async def search_and_transcribe(person_name: str, max_videos: int = 3) -> list[d
     ]
     transcripts = await asyncio.gather(*transcript_tasks, return_exceptions=True)
 
+    name_parts = [p for p in person_name.lower().split() if len(p) > 2]
+
     for candidate, transcript in zip(video_candidates[:max_videos], transcripts):
         if isinstance(transcript, Exception):
             transcript = ""
@@ -160,6 +162,11 @@ async def search_and_transcribe(person_name: str, max_videos: int = 3) -> list[d
         video_id = _extract_video_id(candidate["url"])
         title = candidate["title"]
         snippet = candidate["snippet"]
+
+        # Verify at least the person's name appears in title/snippet/transcript
+        searchable = f"{title} {snippet} {(transcript or '')[:2000]}".lower()
+        if name_parts and not all(p in searchable for p in name_parts):
+            continue
 
         if transcript:
             # Prepend title so LLM knows what this video is about
