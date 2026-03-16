@@ -273,14 +273,12 @@ BACKEND_URL=http://localhost:8000
 
 Base URL: `https://people-discovery-agent-production.up.railway.app`
 
-**Authentication** — JWT Bearer token required for most endpoints:
+**Authentication** — JWT Bearer token required for all endpoints except `/api/health` and `/api/auth/login`:
 ```
 Authorization: Bearer <access_token>
 ```
-API keys (created via `/api/api-keys`) can be used instead for programmatic access:
-```
-X-API-Key: dk_...
-```
+
+> **What's implemented:** 27 endpoints across discovery, person management, intelligence, and admin. Endpoints listed in earlier versions (lists, notes, tags, CRM, Slack, public sharing, API keys, webhooks, suggest/typeahead) are **planned but not yet implemented**.
 
 ---
 
@@ -709,234 +707,38 @@ curl https://people-discovery-agent-production.up.railway.app/api/persons/<id>/v
 
 ---
 
-### Lists
+### Semantic Search
 
-Group persons into named, color-coded collections. All require auth.
+#### `GET /api/persons/semantic-search`
+Vector-similarity search over all stored persons. Returns persons ranked by semantic closeness to the query. Requires auth.
 
-#### `GET /api/lists`
+Query params: `q` (search text), `limit` (default 10).
+
 ```bash
-curl https://people-discovery-agent-production.up.railway.app/api/lists \
+curl "https://people-discovery-agent-production.up.railway.app/api/persons/semantic-search?q=logistics+CTO+india&limit=5" \
   -H "Authorization: Bearer <token>"
 ```
 ```json
 {
-  "items": [{"id": "list-uuid", "name": "Tech CTOs India", "color": "#3B82F6", "person_count": 1}]
+  "results": [
+    {
+      "id": "a1b2c3d4-...",
+      "name": "Prashant Parashar",
+      "company": "Delhivery",
+      "current_role": "Senior Vice President & Head of Technology",
+      "similarity_score": 0.91
+    }
+  ],
+  "total": 1
 }
 ```
-
-#### `POST /api/lists`
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/lists \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"name": "Tech CTOs India", "description": "Top tech leaders", "color": "#3B82F6"}'
-```
-
-#### `PUT /api/lists/{list_id}` / `DELETE /api/lists/{list_id}`
-Update or delete a list.
-
-#### `GET /api/lists/{list_id}/persons`
-Persons in a list. Query params: `page`, `per_page`.
-
-#### `POST /api/lists/{list_id}/persons`
-Add persons to a list.
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/lists/<list_id>/persons \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"person_ids": ["uuid-1", "uuid-2"]}'
-```
-```json
-{"added": 2, "person_ids": ["uuid-1", "uuid-2"]}
-```
-
-#### `DELETE /api/lists/{list_id}/persons/{person_id}`
-Remove a person from a list.
-
----
-
-### Notes
-
-Private notes per person. All require auth.
-
-#### `GET /api/persons/{id}/notes`
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/persons/<id>/notes \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{"items": [{"id": "note-uuid", "content": "Met at TechSparks 2025...", "created_at": "..."}]}
-```
-
-#### `POST /api/persons/{id}/notes`
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/persons/<id>/notes \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"content": "Met at TechSparks 2025. Interested in AI tooling."}'
-```
-
-#### `PUT /api/notes/{note_id}` / `DELETE /api/notes/{note_id}`
-Update or delete a note.
-
----
-
-### Tags
-
-Freeform tags per person. All require auth.
-
-#### `GET /api/persons/{id}/tags`
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/persons/<id>/tags \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{"tags": ["logistics-cto", "india-tech-leader", "delhivery"]}
-```
-
-#### `POST /api/persons/{id}/tags`
-Pass an **array** of tags to add in a single request.
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/persons/<id>/tags \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"tags": ["logistics-cto", "india-tech-leader"]}'
-```
-```json
-{"added": ["logistics-cto", "india-tech-leader"]}
-```
-
-#### `DELETE /api/persons/{id}/tags/{tag}`
-Remove a single tag.
-
-#### `GET /api/tags`
-All distinct tags across all persons (for tag cloud / filter UI).
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/tags \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{"items": [{"tag": "logistics-cto", "person_count": 1}, {"tag": "india-tech-leader", "person_count": 1}]}
-```
-
----
-
-### Public Sharing
-
-Generate a token-based, auth-free shareable link for any profile.
-The frontend renders it at `/profile/[token]`.
-
-#### `POST /api/persons/{id}/share`
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/persons/<id>/share \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{
-  "share_token": "q2iTET4sEnPOWAJq...",
-  "url": "https://people-discovery-agent-production.up.railway.app/api/public/q2iTET4sEnPOWAJq..."
-}
-```
-The public profile page URL: `https://frontend-theta-seven-44.vercel.app/profile/q2iTET4sEnPOWAJq...`
-
-#### `GET /api/public/{share_token}`
-Fetch the public profile. **No auth required.**
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/public/<share_token>
-```
-Returns: name, current_role, company, location, bio, expertise, education, career_timeline, social_links, sources (no internal metadata).
-
-#### `DELETE /api/persons/{id}/share`
-Revoke the share link.
-```bash
-curl -X DELETE https://people-discovery-agent-production.up.railway.app/api/persons/<id>/share \
-  -H "Authorization: Bearer <token>"
-```
-
----
-
-### CRM Integrations
-
-Push any discovered person directly into your CRM. All require auth.
-
-#### `POST /api/crm/hubspot/push/{person_id}`
-Push as a HubSpot contact. Uses `HUBSPOT_API_KEY` env var (or pass in body).
-
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/crm/hubspot/push/<person_id> \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{}'
-```
-```json
-{"hubspot_contact_id": "12345678"}
-```
-Returns `409` if contact already exists in HubSpot.
-
-#### `POST /api/crm/salesforce/push/{person_id}`
-Push as a Salesforce lead.
-
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/crm/salesforce/push/<person_id> \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"sf_access_token": "00D...", "sf_instance_url": "https://yourorg.my.salesforce.com"}'
-```
-```json
-{"salesforce_lead_id": "00Q..."}
-```
-
-#### `GET /api/crm/export-data/{person_id}`
-Get person data pre-mapped to both CRM schemas.
-
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/crm/export-data/<person_id> \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{
-  "person_id": "uuid",
-  "hubspot": {
-    "firstname": "Prashant", "lastname": "Parashar",
-    "company": "Delhivery", "jobtitle": "Senior Vice President & Head of Technology",
-    "description": "Prashant Parashar is a seasoned technology executive...",
-    "city": "Bengaluru, Karnataka, India"
-  },
-  "salesforce": {
-    "FirstName": "Prashant", "LastName": "Parashar",
-    "Company": "Delhivery", "Title": "Senior Vice President & Head of Technology"
-  }
-}
-```
-
----
-
-### Slack Integration
-
-Trigger discovery from any Slack channel via `/discover <name>`. Results posted as Block Kit cards.
-
-#### `POST /api/slack/command`
-Slack slash command receiver verified via HMAC-SHA256 (`X-Slack-Signature`).
-This endpoint is called by Slack's infrastructure — configure it in your Slack app.
-
-**Setup:**
-1. Create a Slack App at https://api.slack.com/apps
-2. Add a `/discover` slash command pointing to `https://your-backend.railway.app/api/slack/command`
-3. Copy the Signing Secret → set `SLACK_SIGNING_SECRET` in backend env
-4. Set `SLACK_BOT_TOKEN` if needed
-
-**Usage in Slack:**
-```
-/discover Prashant Parashar
-```
-The bot immediately acknowledges, runs discovery in the background, then posts the result card.
 
 ---
 
 ### Admin
 
 #### `GET /api/admin/costs`
-Cost dashboard.
+Cost dashboard — total spend, per-job breakdown.
 
 ```bash
 curl https://people-discovery-agent-production.up.railway.app/api/admin/costs \
@@ -951,25 +753,6 @@ curl https://people-discovery-agent-production.up.railway.app/api/admin/costs \
 }
 ```
 
-#### `GET /api/admin/analytics`
-Aggregated discovery stats.
-
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/admin/analytics \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{
-  "total_persons": 5,
-  "total_sources": 240,
-  "total_discoveries": 10,
-  "discoveries_last_7_days": 3,
-  "top_searched_companies": [{"company": "Delhivery", "count": 2}],
-  "source_distribution": {"web": 120, "linkedin_profile": 40},
-  "avg_confidence_score": 0.87
-}
-```
-
 #### `GET /api/admin/rate-limits`
 Per-source rate limit status.
 
@@ -978,23 +761,8 @@ curl https://people-discovery-agent-production.up.railway.app/api/admin/rate-lim
   -H "Authorization: Bearer <token>"
 ```
 
-#### `GET /api/admin/audit`
-Full audit log of all admin actions (create, update, delete, share, etc.) with user, IP, timestamp.
-
-```bash
-curl "https://people-discovery-agent-production.up.railway.app/api/admin/audit?limit=50" \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{
-  "items": [
-    {"action": "create", "target_type": "saved_list", "user_email": "admin@discovery.local", "created_at": "..."}
-  ]
-}
-```
-
 #### `POST /api/admin/users`
-Create a new admin/viewer user. Roles: `admin`, `viewer`, `api_only`.
+Create a new admin user. Roles: `admin`, `viewer`.
 
 ```bash
 curl -X POST https://people-discovery-agent-production.up.railway.app/api/admin/users \
@@ -1007,10 +775,10 @@ curl -X POST https://people-discovery-agent-production.up.railway.app/api/admin/
 ```
 
 #### `GET /api/admin/users`
-List all users.
+List all admin users.
 
 #### `DELETE /api/admin/users/{user_id}`
-Delete a user.
+Delete an admin user.
 
 #### `POST /api/cache/cleanup`
 Purge expired cache entries.
@@ -1025,104 +793,23 @@ curl -X POST https://people-discovery-agent-production.up.railway.app/api/cache/
 
 ---
 
-### API Keys
+### Planned (Not Yet Implemented)
 
-Programmatic keys for integrating without admin credentials. All management requires auth.
+The following features exist in the data model but the API endpoints are not yet built:
 
-#### `GET /api/api-keys`
-```bash
-curl https://people-discovery-agent-production.up.railway.app/api/api-keys \
-  -H "Authorization: Bearer <token>"
-```
-```json
-[{"id": "key-uuid", "name": "Production", "rate_limit_per_day": 1000, "active": true, "usage_count": 127}]
-```
-
-#### `POST /api/api-keys`
-The raw key is returned **only once** — store it immediately.
-
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/api-keys \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"name": "Production", "rate_limit_per_day": 1000}'
-```
-```json
-{"id": "key-uuid", "name": "Production", "key": "dk_abc123...", "rate_limit_per_day": 1000, "active": true}
-```
-
-#### `DELETE /api/api-keys/{key_id}`
-```bash
-curl -X DELETE https://people-discovery-agent-production.up.railway.app/api/api-keys/<key_id> \
-  -H "Authorization: Bearer <token>"
-```
-```json
-{"revoked": true}
-```
-
----
-
-### Webhooks
-
-Fired after every completed discovery job. Management requires auth.
-
-#### Webhook Events
-
-| Event | Fired when |
-|-------|-----------|
-| `job.completed` | New person discovered and profile created |
-| `person.updated` | Existing person updated via re-search |
-
-#### Payload
-```json
-{
-  "event": "job.completed",
-  "data": {
-    "job_id": "uuid", "person_id": "uuid",
-    "person_name": "Prashant Parashar",
-    "status": "completed", "merged": false,
-    "total_cost": 0.015, "latency_ms": 89012,
-    "sources_hit": 34, "new_sources_added": 34
-  }
-}
-```
-
-**Signature verification** — every delivery includes `X-Webhook-Signature: t=<timestamp>,v1=<hmac_sha256>`.
-Verify with: `HMAC-SHA256(secret, f"{timestamp}.{body}")`
-
-#### `GET /api/webhooks`
-#### `POST /api/webhooks`
-```bash
-curl -X POST https://people-discovery-agent-production.up.railway.app/api/webhooks \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"url": "https://your-server.com/hooks", "secret": "your-secret", "events": ["job.completed", "person.updated"]}'
-```
-```json
-{"id": "wh-uuid", "url": "https://your-server.com/hooks", "events": ["job.completed", "person.updated"], "active": true}
-```
-
-#### `DELETE /api/webhooks/{webhook_id}`
-Returns `{"deactivated": true}`.
-
-#### `GET /api/webhooks/{webhook_id}/deliveries`
-Last 50 delivery attempts with status code, success flag, retry count.
-
----
-
-### Suggest / Typeahead
-
-#### `GET /api/suggest`
-No auth required.
-
-Query params: `q` (min 1 char), `type` (`person` or `company`, default `person`), `limit` (1-20, default 5).
-
-```bash
-curl "https://people-discovery-agent-production.up.railway.app/api/suggest?q=Prash&type=person"
-```
-```json
-[{"id": "a1b2c3d4-...", "name": "Prashant Parashar", "company": "Delhivery"}]
-```
+| Feature | Endpoints |
+|---------|-----------|
+| **Saved Lists** | `GET/POST /api/lists`, `GET/POST/DELETE /api/lists/{id}/persons` |
+| **Notes** | `GET/POST /api/persons/{id}/notes`, `PUT/DELETE /api/notes/{note_id}` |
+| **Tags** | `GET/POST /api/persons/{id}/tags`, `DELETE /api/persons/{id}/tags/{tag}`, `GET /api/tags` |
+| **Public Sharing** | `POST /api/persons/{id}/share`, `GET /api/public/{token}`, `DELETE /api/persons/{id}/share` |
+| **CRM Push** | `POST /api/crm/hubspot/push/{id}`, `POST /api/crm/salesforce/push/{id}` |
+| **Slack Bot** | `POST /api/slack/command` |
+| **API Keys** | `GET/POST /api/api-keys`, `DELETE /api/api-keys/{id}` |
+| **Webhooks** | `GET/POST /api/webhooks`, `DELETE /api/webhooks/{id}`, `GET /api/webhooks/{id}/deliveries` |
+| **Suggest / Typeahead** | `GET /api/suggest` |
+| **Audit Log** | `GET /api/admin/audit` |
+| **Analytics** | `GET /api/admin/analytics` |
 
 ---
 

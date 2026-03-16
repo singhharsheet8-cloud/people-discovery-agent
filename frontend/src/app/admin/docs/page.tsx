@@ -161,6 +161,25 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     },
     {
       method: "GET",
+      path: "/api/persons/semantic-search",
+      description: "Vector-similarity search over all stored persons. Returns persons ranked by semantic closeness to the natural-language query. Useful for queries like 'logistics CTO in India' or 'AI researcher from IIT'.",
+      auth: true,
+      params: "q: search text (required), limit: max results (default 10)",
+      response: `{
+  "results": [
+    {
+      "id": "a1b2c3d4-...",
+      "name": "Prashant Parashar",
+      "company": "Delhivery",
+      "current_role": "Senior Vice President & Head of Technology",
+      "similarity_score": 0.91
+    }
+  ],
+  "total": 1
+}`,
+    },
+    {
+      method: "GET",
       path: "/api/persons/{person_id}",
       description: "Full person profile with all raw sources, job history, and version log.",
       auth: false,
@@ -379,14 +398,37 @@ const ENDPOINTS: Record<string, Endpoint[]> = {
     },
     {
       method: "POST",
+      path: "/api/admin/users",
+      description: "Create a new admin user (admin only). Roles: admin, viewer.",
+      auth: true,
+      body: `{ "email": "analyst@company.com", "password": "secure123!", "role": "viewer" }`,
+      response: `{ "id": "user-uuid", "email": "analyst@company.com", "role": "viewer", "created_at": "..." }`,
+    },
+    {
+      method: "GET",
+      path: "/api/admin/users",
+      description: "List all admin users (admin only).",
+      auth: true,
+      response: `[{ "id": "user-uuid", "email": "admin@discovery.local", "role": "admin" }]`,
+    },
+    {
+      method: "DELETE",
+      path: "/api/admin/users/{user_id}",
+      description: "Delete an admin user (admin only). Cannot delete yourself.",
+      auth: true,
+      response: `{ "deleted": true }`,
+    },
+    {
+      method: "POST",
       path: "/api/cache/cleanup",
       description: "Remove expired cache entries to free memory (admin only).",
       auth: true,
+      response: `{ "cleaned": 47 }`,
     },
     {
       method: "GET",
       path: "/api/health",
-      description: "Health check — returns system status, database connectivity, and version.",
+      description: "Health check — returns system status, database connectivity, and version. No auth required.",
       auth: false,
       response: `{
   "status": "healthy",
@@ -517,7 +559,7 @@ export default function ApiDocsPage() {
         </div>
         <p className="text-sm text-gray-400">
           All endpoints return JSON. Authentication uses JWT Bearer tokens — obtain one via <code className="text-gray-300">POST /api/auth/login</code>.
-          For machine integrations, pass an API key via the <code className="text-gray-300">X-API-Key</code> header (5× higher rate limit).
+          Only <code className="text-gray-300">GET /api/health</code> and <code className="text-gray-300">POST /api/auth/login</code> are public; all other endpoints require a Bearer token.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
           <div className="rounded-lg bg-white/[0.03] border border-white/10 p-3">
