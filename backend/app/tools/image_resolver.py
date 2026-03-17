@@ -142,14 +142,17 @@ async def resolve_profile_image(
     # Extract personal website URL — identity-safe, highest fidelity after structured data
     personal_website_url = _extract_personal_website_url(results)
 
+    # Also collect all non-platform web source URLs to scan for portraits
+    # (podcast/interview/blog pages about the person also contain their headshot)
+    portrait_page_urls = _extract_portrait_page_urls(results, personal_website_url)
+
     tiers: list[tuple[str, asyncio.coroutine]] = [
         # T1: profilePicUrl already in structured data — free, identity-safe
         ("T1-structured",          _async(lambda: _extract_from_sources(results))),
-        # T1b: Personal website og:image — scrape the person's own site (portfolio,
-        #      blog, personal page). IDENTITY-SAFE: the site belongs to the person.
-        #      Comes before LinkedIn/Apify because personal sites almost always show
-        #      the right headshot with no ambiguity.
-        ("T1b-personal-website",   _personal_website_og_image(personal_website_url)),
+        # T1b: Scrape non-platform web pages (personal site, podcast pages, blog posts
+        #      about the person) for a portrait. The aspect ratio gate naturally
+        #      rejects wide banners and accepts headshots.
+        ("T1b-portrait-pages",     _scan_portrait_pages(portrait_page_urls, name)),
         # T2a: Firecrawl og:image — scrape LinkedIn profile page for og:image tag
         #      Works without Apify credits; identity-safe (right profile URL)
         ("T2a-firecrawl-og",       _firecrawl_og_image(linkedin_profile_url)),
@@ -373,6 +376,66 @@ def _extract_linkedin_profile_url(results: list[dict]) -> str | None:
     return best_url
 
 
+def _extract_portrait_page_urls(
+    results: list[dict], personal_website_url: str | None
+) -> list[str]:
+    """
+    Build an ordered list of non-platform URLs to scan for the person's portrait.
+
+    Priority:
+      1. Personal website (own domain) — most identity-safe
+      2. Podcast/interview/blog pages that feature the person
+         (e.g. sbw.hvj.coach/episodes/vidyadhar, anchor.fm, spotify episode pages)
+      3. Other high-relevance web sources
+
+    All LinkedIn/Twitter/Facebook/Instagram/job-board URLs are excluded.
+    """
+    _EXCLUDED = frozenset({
+        "linkedin.com", "twitter.com", "x.com", "github.com", "facebook.com",
+        "instagram.com", "youtube.com", "wikipedia.org", "serpapi.com",
+        # People aggregators — they don't show a headshot of the right person
+        "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
+        "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
+        "nubela.co", "clay.com", "hunter.io", "clearbit.com",
+    })
+
+    def _is_ok(url: str) -> bool:
+        if not url or not url.startswith("http"):
+            return False
+        try:
+            host = urllib.parse.urlparse(url).hostname or ""
+        except Exception:
+            return False
+        return bool(host) and not any(d in host for d in _EXCLUDED)
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(url: str) -> None:
+        key = url.split("?")[0].rstrip("/")
+        if key and key not in seen and _is_ok(url):
+            seen.add(key)
+            ordered.append(key)
+
+    # 1. Personal website first
+    if personal_website_url:
+        _add(personal_website_url)
+
+    # 2. All non-excluded web/news sources, sorted by relevance
+    scored = []
+    for r in results:
+        url = r.get("url", "")
+        if not _is_ok(url):
+            continue
+        score = float(r.get("relevance_score", r.get("confidence", 0.5)) or 0.5)
+        scored.append((score, url))
+    scored.sort(reverse=True)
+    for _, url in scored:
+        _add(url)
+
+    return ordered
+
+
 def _extract_personal_website_url(results: list[dict]) -> str | None:
     """
     Extract the person's personal website URL from search results or structured data.
@@ -448,17 +511,42 @@ def _extract_personal_website_url(results: list[dict]) -> str | None:
     return None
 
 
+async def _scan_portrait_pages(urls: list[str], name: str) -> str | None:
+    """
+    Scan a list of web pages (personal site, podcast episodes, blog posts) for
+    the person's portrait image.
+
+    Tries each URL sequentially, returns the first portrait-quality image found.
+    Caps at 5 URLs to avoid excessive latency.
+    """
+    for url in urls[:5]:
+        result = await _personal_website_og_image(url)
+        if result:
+            return result
+    return None
+
+
 async def _personal_website_og_image(website_url: str | None) -> str | None:
     """
-    Scrape the person's personal website for an og:image or the first portrait-shaped
-    image. IDENTITY-SAFE: the site belongs to the person.
+    Scrape the person's personal website for a portrait-quality image.
+    IDENTITY-SAFE: the site belongs to the person.
 
     Strategy (no Firecrawl key required):
       1. Fetch the page with httpx (follows redirects)
-      2. Extract og:image meta tag → highest priority
-      3. Extract all <img src> tags, prefer those with 'portrait', 'photo', 'avatar',
-         'profile', 'headshot', 'face', 'about' in the URL or alt text
-      4. Validate each candidate through _validate_image
+      2. Build a prioritized candidate list:
+           a. og:image / twitter:image meta tags  (try first, may be landscape banner)
+           b. <img> tags whose src/alt hint at a portrait (justvidyadhar, headshot, etc.)
+           c. ALL remaining <img> tags (fallback — aspect gate filters landscapes)
+      3. Validate each candidate through _validate_image.
+         The aspect ratio gate (0.45–1.65) naturally rejects wide podcast/blog banners
+         (e.g. og:image of 1200×700 = 1.71 → rejected) and accepts the actual headshot.
+
+    Key insight: og:image is NOT always the person's headshot — for podcast pages,
+    blog posts, and news articles it is typically a 16:9 or 3:2 landscape banner.
+    We must try ALL candidates; the first one that passes both dimension and aspect
+    gates is accepted. This means the headshot buried in the page body
+    (e.g. justvidyadhar_o5nkg9.jpg on sbw.hvj.coach) will be found even when the
+    og:image is a wide banner that fails.
     """
     if not website_url:
         return None
@@ -477,63 +565,86 @@ async def _personal_website_og_image(website_url: str | None) -> str | None:
 
             html = resp.text
 
-        candidates: list[str] = []
+        base_parsed = urllib.parse.urlparse(website_url)
+        base_origin = f"{base_parsed.scheme}://{base_parsed.netloc}"
 
-        # 1. og:image meta tag — highest priority
-        og = re.search(
+        def _abs(src: str) -> str | None:
+            src = src.split()[0].strip()  # handle srcset ("url 2x" syntax)
+            if src.startswith("http"):
+                return src
+            if src.startswith("//"):
+                return f"{base_parsed.scheme}:{src}"
+            if src.startswith("/"):
+                return f"{base_origin}{src}"
+            return None
+
+        # ── Tier A: og:image and twitter:image (try first, but may be landscape) ──
+        tier_a: list[str] = []
+        for pat in (
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            html, re.IGNORECASE,
-        ) or re.search(
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-            html, re.IGNORECASE,
-        )
-        if og:
-            url = og.group(1).strip()
-            if url.startswith("http"):
-                candidates.append(url)
-            elif url.startswith("/"):
-                base = urllib.parse.urlparse(website_url)
-                candidates.append(f"{base.scheme}://{base.netloc}{url}")
-
-        # 2. twitter:image meta
-        tw = re.search(
             r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
-            html, re.IGNORECASE,
-        )
-        if tw:
-            url = tw.group(1).strip()
-            if url.startswith("http"):
-                candidates.append(url)
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        ):
+            m = re.search(pat, html, re.IGNORECASE)
+            if m:
+                abs_url = _abs(m.group(1).strip())
+                if abs_url and abs_url not in tier_a:
+                    tier_a.append(abs_url)
 
-        # 3. <img> tags with portrait-suggesting keywords in src or alt
-        _PORTRAIT_HINTS = ("portrait", "photo", "avatar", "profile", "headshot",
-                           "face", "about", "me", "selfie", "pic")
+        # ── Tier B: <img> tags with portrait-suggesting tokens in URL or alt ──
+        _PORTRAIT_HINTS = (
+            "portrait", "photo", "avatar", "profile", "headshot", "face",
+            "about", "selfie", "pic", "me.", "/me/", "author", "speaker",
+            "guest", "justvidyadhar", "vidy", "person",
+        )
+        tier_b: list[str] = []
+        tier_c: list[str] = []  # all other imgs — last resort
+
         img_tags = re.findall(
-            r'<img[^>]+(?:src|srcset)=["\']([^"\']+)["\'][^>]*(?:alt=["\']([^"\']*)["\'])?',
+            r'<img\b[^>]*(?:src|srcset)=["\']([^"\']+)["\'][^>]*(?: alt=["\']([^"\']*)["\'])?[^>]*>',
             html, re.IGNORECASE,
         )
-        for src, alt in img_tags:
-            # Take first URL from srcset
-            src = src.split()[0].strip()
-            if not src.startswith("http") and not src.startswith("/"):
+        for src_raw, alt in img_tags:
+            abs_url = _abs(src_raw)
+            if not abs_url:
                 continue
-            combined = (src + " " + alt).lower()
+            # Skip tiny icons and data URIs
+            if "data:" in abs_url or any(
+                x in abs_url.lower() for x in (".svg", "favicon", "logo", "icon", "spinner")
+            ):
+                continue
+            combined = (abs_url + " " + (alt or "")).lower()
             if any(h in combined for h in _PORTRAIT_HINTS):
-                if src.startswith("/"):
-                    base = urllib.parse.urlparse(website_url)
-                    src = f"{base.scheme}://{base.netloc}{src}"
-                if src.startswith("http"):
-                    candidates.append(src)
+                if abs_url not in tier_b:
+                    tier_b.append(abs_url)
+            else:
+                if abs_url not in tier_c:
+                    tier_c.append(abs_url)
 
-        logger.debug(f"[image] personal website {website_url}: {len(candidates)} candidate(s)")
+        # Also check preload hints (Next.js / super.so sites use imageSrcSet)
+        preload_imgs = re.findall(
+            r'<link[^>]+(?:rel=["\']preload["\'])[^>]+(?:as=["\']image["\'])[^>]+(?:href|imageSrcSet)=["\']([^"\']+)["\']',
+            html, re.IGNORECASE,
+        )
+        for src_raw in preload_imgs:
+            abs_url = _abs(src_raw.split(",")[0].split()[0])
+            if abs_url and abs_url not in tier_b:
+                tier_b.append(abs_url)
 
-        # Validate each candidate
-        for url in candidates:
+        all_candidates = list(dict.fromkeys(tier_a + tier_b + tier_c))
+        logger.debug(
+            f"[image] personal website {website_url}: "
+            f"{len(tier_a)} og/tw + {len(tier_b)} portrait-hints + {len(tier_c)} other"
+        )
+
+        # Validate each candidate — aspect gate naturally filters landscape banners
+        for url in all_candidates:
             ok, reason = await _validate_image(url)
             if ok:
-                logger.info(f"[image] T1b-personal-website: {url[:80]} from {website_url}")
+                logger.info(f"[image] T1b-personal-website: {url[:90]} from {website_url}")
                 return url
-            logger.debug(f"[image] personal website candidate rejected ({reason}): {url[:80]}")
+            logger.debug(f"[image] personal site candidate rejected ({reason}): {url[:80]}")
 
     except Exception as e:
         logger.debug(f"[image] personal website scrape failed for {website_url}: {e}")
