@@ -134,40 +134,14 @@ async def _try_search_provider(handle: str) -> list[dict]:
 
 
 async def _firecrawl_nitter(handle: str) -> list[dict]:
-    """Try to scrape the Twitter/X profile via Firecrawl for richer content."""
-    try:
-        from app.config import get_settings
-        api_key = get_settings().firecrawl_api_key
-        if not api_key:
-            return []
+    """x.com and twitter.com are blocked by Firecrawl — this is a no-op.
 
-        from firecrawl import AsyncFirecrawl
-        app = AsyncFirecrawl(api_key=api_key)
-
-        # Try X.com directly
-        profile_url = f"https://x.com/{handle}"
-        resp = await app.scrape(profile_url, formats=["markdown"])
-
-        markdown = ""
-        if isinstance(resp, dict):
-            markdown = resp.get("markdown", "")
-        else:
-            markdown = getattr(resp, "markdown", "") or ""
-
-        if not markdown or len(markdown) < 50:
-            return []
-
-        logger.info(f"[twitter] Firecrawl scraped @{handle} profile")
-        return [{
-            "title": f"@{handle} — Twitter/X Profile",
-            "url": profile_url,
-            "content": markdown[:5000],
-            "source_type": "twitter",
-            "score": 0.85,
-        }]
-    except Exception as e:
-        logger.debug(f"[twitter] Firecrawl profile scrape failed for @{handle}: {e}")
-        return []
+    Kept as a stub so call sites don't need to change. Returns [] immediately.
+    Nitter mirrors are also unstable and often down, so we skip those too.
+    Twitter data comes from Apify or Google search instead.
+    """
+    logger.debug(f"[twitter] Firecrawl skipped for @{handle} (x.com is blocked)")
+    return []
 
 
 async def _try_apify(handle: str) -> list[dict]:
@@ -220,8 +194,12 @@ async def _try_apify(handle: str) -> list[dict]:
                     content_parts.append(f"Bio: {bio}")
                 content_parts.append(f"Followers: {followers:,} | Following: {following:,}")
                 if tweet_list:
-                    top_tweets = " | ".join(t["text"][:150] for t in tweet_list[:5])
-                    content_parts.append(f"Recent tweets: {top_tweets}")
+                    # Include up to 15 tweets in content (was 5 — but we request 20,
+                    # so use the data we've already paid for)
+                    top_tweets = "\n".join(
+                        f"- {t['text'][:200]}" for t in tweet_list[:15]
+                    )
+                    content_parts.append(f"Recent tweets:\n{top_tweets}")
 
                 structured = {
                     "bio": bio,

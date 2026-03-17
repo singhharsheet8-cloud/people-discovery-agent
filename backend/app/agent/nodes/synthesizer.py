@@ -129,11 +129,28 @@ def _build_sources_text(results: list[dict], max_sources: int = 80) -> list[str]
         ),
     )
 
+    # Per-source character budgets — LinkedIn experience can be 30K chars; give it room
+    _CHAR_BUDGET: dict[str, int] = {
+        "linkedin_profile": 8000,
+        "linkedin_experience": 8000,
+        "linkedin_posts": 4000,
+        "youtube_transcript": 6000,
+        "github": 3000,
+        "scholar": 3000,
+        "crunchbase": 4000,
+        "wikipedia": 4000,
+        "personal_website": 4000,
+        "twitter": 2000,
+        "news": 2000,
+        "web": 2000,
+        "firecrawl": 2000,
+    }
+
     texts = []
     for i, r in prioritised[:max_sources]:
         content = r.get("content") or r.get("snippet") or ""
         source_type = r.get("source_type", "web")
-        max_chars = 1500 if source_type in _HIGH_VALUE_SOURCES else 800
+        max_chars = _CHAR_BUDGET.get(source_type, 1500)
         texts.append(
             f"[Source {i}] ({source_type}) {r.get('title', '')}\n"
             f"URL: {r.get('url', '')}\n"
@@ -220,15 +237,15 @@ IMPORTANT REMINDERS:
 
     try:
         content = response.content.strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-
+        # Robust JSON extraction: handle ```json ... ```, ``` ... ```, or raw JSON
+        import re as _re
+        fence_match = _re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if fence_match:
+            content = fence_match.group(1).strip()
         profile = json.loads(content)
-    except (json.JSONDecodeError, IndexError) as e:
+    except (json.JSONDecodeError, IndexError, ValueError) as e:
         logger.error(f"Failed to parse synthesis response: {e}")
-        logger.error(f"Raw response (first 500 chars): {response.content[:500]}")
+        logger.error(f"Raw response (first 1000 chars): {response.content[:1000]}")
         profile = _build_fallback_profile(state, analysis, enrichment)
 
     # Recalculate final confidence based on full evidence set (overrides the early disambiguate estimate)
@@ -274,6 +291,13 @@ def _build_fallback_profile(state: AgentState, analysis: dict, enrichment: dict)
     best = people[0] if people else {}
     input_data = state.get("input", {})
 
+    # Include raw source URLs so the consumer knows provenance even when LLM failed
+    raw_sources = [
+        {"url": r.get("url", ""), "platform": r.get("source_type", "web"),
+         "title": r.get("title", ""), "relevance_score": r.get("relevance_score", 0.5)}
+        for r in state.get("search_results", [])[:15]
+        if r.get("url")
+    ]
     return {
         "name": best.get("name", input_data.get("name", "Unknown")),
         "current_role": best.get("role"),
@@ -287,7 +311,8 @@ def _build_fallback_profile(state: AgentState, analysis: dict, enrichment: dict)
         "career_timeline": enrichment.get("career_timeline", []),
         "reputation_score": enrichment.get("source_diversity", 0.5),
         "social_links": best.get("social_links", {}),
-        "sources": [],
+        "sources": raw_sources,
+        "_synthesis_failed": True,
     }
 
 

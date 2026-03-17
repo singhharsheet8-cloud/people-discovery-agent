@@ -551,19 +551,26 @@ async def _scan_portrait_pages(urls: list[str], name: str) -> str | None:
     """
     Scan up to 10 non-platform web pages for the person's portrait image.
 
-    Pages are already prioritized by _extract_portrait_page_urls (personal site
-    first, then podcast/blog/interview pages, then other web sources).
-
-    Uses httpx directly — no Firecrawl credits consumed.
-    Stops as soon as a portrait-quality image is found.
+    Pages are fetched CONCURRENTLY (not sequentially) to avoid compound latency.
+    Returns the first valid portrait found, preferring earlier URLs in the list.
     """
-    for url in urls[:10]:
-        try:
-            result = await _personal_website_og_image(url)
-            if result:
-                return result
-        except Exception as e:
-            logger.debug(f"[image] portrait scan failed for {url}: {e}")
+    if not urls:
+        return None
+
+    targets = urls[:10]
+    results = await asyncio.gather(
+        *[_personal_website_og_image(u) for u in targets],
+        return_exceptions=True,
+    )
+
+    # Return first non-None, non-Exception result (preserves URL priority order)
+    for url, result in zip(targets, results):
+        if isinstance(result, Exception):
+            logger.debug(f"[image] portrait scan failed for {url}: {result}")
+            continue
+        if result:
+            logger.info(f"[image] portrait found via concurrent scan: {url}")
+            return result
     return None
 
 
@@ -642,8 +649,10 @@ async def _personal_website_og_image(website_url: str | None) -> str | None:
         tier_b: list[str] = []
         tier_c: list[str] = []  # all other imgs — last resort
 
+        # Also capture data-src / data-lazy-src used by lazy-loading frameworks
+        # (Next.js, Webflow, Gatsby, etc.)
         img_tags = re.findall(
-            r'<img\b[^>]*(?:src|srcset)=["\']([^"\']+)["\'][^>]*(?: alt=["\']([^"\']*)["\'])?[^>]*>',
+            r'<img\b[^>]*(?:src|srcset|data-src|data-lazy-src|data-original)=["\']([^"\']+)["\'][^>]*(?: alt=["\']([^"\']*)["\'])?[^>]*>',
             html, re.IGNORECASE,
         )
         for src_raw, alt in img_tags:
@@ -898,10 +907,11 @@ async def _apify_find_linkedin_url(
                     for item in (items if isinstance(items, list) else []):
                         url = item.get("profileUrl") or item.get("linkedinUrl") or ""
                         if "linkedin.com/in/" in url:
-                            # Basic name check to avoid wrong person
-                            first = name.split()[0].lower()
+                            # Require ALL name parts to match — first-name-only is too
+                            # permissive ("John" matches "Johnson Williams")
+                            name_parts = [p for p in name.lower().split() if len(p) > 1]
                             item_name = (item.get("name") or item.get("fullName") or "").lower()
-                            if first in item_name:
+                            if name_parts and all(p in item_name for p in name_parts):
                                 return url
                     break
     except Exception as e:

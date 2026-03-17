@@ -137,9 +137,16 @@ Only include facts that appear in the sources above."""
     cost_tracker["analyzer"] = usage
 
     try:
-        analysis = json.loads(response.content)
-    except json.JSONDecodeError:
+        content = response.content.strip()
+        # Strip markdown fences before JSON parsing (same pattern as synthesizer)
+        import re as _re
+        fence_match = _re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if fence_match:
+            content = fence_match.group(1).strip()
+        analysis = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
         logger.warning("[analyzer] Failed to parse analyzer response")
+        logger.debug(f"[analyzer] Raw response (first 500): {response.content[:500]}")
         analysis = {
             "identified_people": [],
             "ambiguities": ["Could not parse search results"],
@@ -192,9 +199,13 @@ Only include facts that appear in the sources above."""
         confidence_score,
     )
 
+    # IMPORTANT: Do NOT overwrite search_results — the synthesizer needs ALL scored results
+    # for full context. Use a separate key for the analyzer's filtered subset.
+    # The synthesizer reads from "search_results" (full set, with scores attached).
     return {
         "analyzed_results": analysis,
-        "search_results": filtered_for_analysis,
+        "search_results": scored_results,   # full set with scores, namesake flags attached
+        "filtered_results": filtered_for_analysis,  # analyzer's high-confidence subset
         "confidence_score": confidence_score,
         "cost_tracker": cost_tracker,
         "status": "analysis_complete",

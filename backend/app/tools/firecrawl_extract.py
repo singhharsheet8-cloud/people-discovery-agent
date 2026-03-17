@@ -11,6 +11,7 @@ Improvements:
 
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 from app.cache import get_cached_results, set_cached_results
 from app.config import get_settings
@@ -24,13 +25,21 @@ _BLOCKED_DOMAINS = frozenset({
     "instagram.com",
     "twitter.com",
     "x.com",
+    "reddit.com",   # Reddit blocks scrapers — use .json API instead
+    "tiktok.com",
 })
 
 
 def _is_blocked_domain(url: str) -> bool:
-    """Return True if Firecrawl is known to fail on this domain."""
-    url_lower = url.lower()
-    return any(d in url_lower for d in _BLOCKED_DOMAINS)
+    """Return True if Firecrawl is known to fail on this domain.
+
+    Uses proper hostname parsing to avoid false positives like 'mylinkedin.com'.
+    """
+    try:
+        host = urlparse(url.lower()).hostname or ""
+        return any(host == d or host.endswith("." + d) for d in _BLOCKED_DOMAINS)
+    except Exception:
+        return False
 
 
 def _response_to_dict(resp) -> dict:
@@ -65,8 +74,10 @@ async def extract_page_content(url: str) -> dict:
         logger.debug(f"[firecrawl] skipping blocked domain: {url}")
         return {}
 
-    # Cache stores the full result dict
-    cached = await get_cached_results(url, "firecrawl")
+    # Canonicalise URL for cache lookup — strip query params so
+    # utm_source= variants don't create separate cache entries
+    cache_key = url.split("?")[0].rstrip("/")
+    cached = await get_cached_results(cache_key, "firecrawl")
     if cached is not None and cached:
         return cached[0]  # already a result dict
 
@@ -83,6 +94,7 @@ async def extract_page_content(url: str) -> dict:
 
         content = raw.get("markdown", "")
         if not content:
+            # Page returned but had no extractable content — don't cache (might retry)
             return {}
 
         title = raw.get("metadata", {}).get("title", url) if isinstance(raw.get("metadata"), dict) else url
@@ -90,17 +102,19 @@ async def extract_page_content(url: str) -> dict:
         result_dict = {
             "title": title,
             "url": url,
-            "content": content[:20000],
+            # Raised from 20K → 50K: long pages (Wikipedia, bios, articles) were truncated
+            "content": content[:50000],
             "source_type": "firecrawl",
             "score": 0.9,
             "structured": raw,
         }
-        await set_cached_results(url, "firecrawl", [result_dict])
+        await set_cached_results(cache_key, "firecrawl", [result_dict])
         return result_dict
 
     except Exception as e:
         logger.error(f"[firecrawl] extract failed for {url}: {e}")
-        return {}
+        # Return None to signal failure (distinct from {} which means "page was empty")
+        return None
 
 
 async def batch_extract(
@@ -132,7 +146,12 @@ async def batch_extract(
         if isinstance(raw, Exception):
             logger.warning(f"[firecrawl] batch item failed for {deduped[i]}: {raw}")
             continue
+        if raw is None:
+            # extract_page_content signals network/API failure with None
+            logger.debug(f"[firecrawl] batch item returned None (failed) for {deduped[i]}")
+            continue
         if not raw or not isinstance(raw, dict):
+            # Empty dict = page had no content
             continue
         results.append(raw)
 

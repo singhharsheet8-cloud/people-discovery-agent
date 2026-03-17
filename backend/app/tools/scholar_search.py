@@ -24,9 +24,14 @@ async def search_scholar(
     When company/role are provided, the query is augmented to reduce
     namesake pollution (e.g. 'Prashant Parashar Delhivery').
     """
+    # Build disambiguating query — company and role reduce namesake pollution
     query = person_name
-    if company:
+    if company and role:
+        query = f"{person_name} {company} {role}"
+    elif company:
         query = f"{person_name} {company}"
+    elif role:
+        query = f"{person_name} {role}"
 
     cache_key = f"scholar:{query}"
     cached = await get_cached_results(cache_key, "scholar")
@@ -75,7 +80,10 @@ async def search_scholar(
             )
             if len(results) >= max_results:
                 break
-        await set_cached_results(cache_key, "scholar", results)
+        # Only cache non-empty results — empty means the query found nothing,
+        # which might succeed with a different query on retry
+        if results:
+            await set_cached_results(cache_key, "scholar", results)
         return results
     except Exception as e:
         logger.error(f"Scholar search failed: {e}")

@@ -26,8 +26,11 @@ logger = logging.getLogger(__name__)
 
 APIFY_BASE = "https://api.apify.com/v2"
 
-# LinkedIn blocks Firecrawl — track this so we don't retry on every call
-_FIRECRAWL_LINKEDIN_BLOCKED = False
+# LinkedIn reliably blocks Firecrawl — initialize to True to skip the first
+# cold-start 403 attempt (saves ~10s per process restart).
+# Set env FIRECRAWL_TRY_LINKEDIN=true to override (for testing if this ever changes).
+import os as _os
+_FIRECRAWL_LINKEDIN_BLOCKED = not _os.getenv("FIRECRAWL_TRY_LINKEDIN", "").lower().startswith("t")
 
 
 def _normalise_linkedin_url(url: str) -> str:
@@ -291,7 +294,8 @@ def _harvestapi_to_text(el: dict) -> str:
                 line += f" ({emp_type})"
             lines.append(line)
             if desc:
-                lines.append(f"  {desc[:500]}")
+                # Raised from 500 → 2000: role descriptions often contain key tech/context
+                lines.append(f"  {desc[:2000]}")
 
     # Education
     edus = el.get("education", [])

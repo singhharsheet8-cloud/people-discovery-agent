@@ -118,24 +118,28 @@ Generate 8-10 targeted search queries across all relevant platforms. Use direct 
                 seen_queries.add(key)
                 queries.append(q)
 
-        # Guarantee "web" and "news" are always present
+        # Guarantee "web" and "news" are always present — insert BEFORE the slice
+        # so they can't get truncated by max_search_queries
         existing_types = {q.get("search_type") for q in queries}
         if "web" not in existing_types and name:
             queries.insert(0, {"query": base_q, "search_type": "web",
                                 "rationale": "Broad web coverage"})
         if "news" not in existing_types and name:
-            queries.append({"query": base_q, "search_type": "news",
-                             "rationale": "News and press coverage"})
+            queries.insert(1, {"query": base_q, "search_type": "news",
+                                "rationale": "News and press coverage"})
 
         queries = queries[:settings.max_search_queries]
 
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, KeyError, TypeError):
         logger.warning("Failed to parse planner response, using fallback queries")
         name = input_data.get("name", input_data.get("context", "unknown"))
+        company = input_data.get("company", "")
+        # Include company in fallback queries for disambiguation
+        base_q = f"{name} {company}".strip() if company else name
         queries = [
-            {"query": name, "search_type": "web", "rationale": "Broad web search"},
-            {"query": name, "search_type": "linkedin_posts", "rationale": "LinkedIn posts"},
-            {"query": name, "search_type": "news", "rationale": "News coverage"},
+            {"query": base_q, "search_type": "web", "rationale": "Broad web search"},
+            {"query": base_q, "search_type": "linkedin_posts", "rationale": "LinkedIn posts"},
+            {"query": base_q, "search_type": "news", "rationale": "News coverage"},
         ]
         if input_data.get("linkedin_url"):
             queries.insert(0, {"query": input_data["linkedin_url"], "search_type": "linkedin_profile", "rationale": "Direct LinkedIn profile"})

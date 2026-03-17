@@ -159,8 +159,10 @@ async def _tavily_search(
             platform = _detect_platform(item.get("url", ""))
             content = item.get("content", "")
             raw = item.get("raw_content", "")
+            # Use raw_content when available — raised from 2K to 10K so
+            # downstream tools (synthesizer, enricher) can work with real article text
             if raw and len(raw) > len(content):
-                content = raw[:2000]
+                content = raw[:10000]
             results.append(SearchResult(
                 title=item.get("title", ""),
                 url=item.get("url", ""),
@@ -216,19 +218,21 @@ async def _serper_web_fallback(
             items = data.get("organic_results", [])
 
         results = []
-        for item in items[:max_results]:
+        for idx, item in enumerate(items[:max_results]):
             url = item.get("link", item.get("url", ""))
             title = item.get("title", "")
             snippet = item.get("snippet", item.get("description", item.get("content", "")))
             if not url:
                 continue
             platform = _detect_platform(url)
+            # Position-based score: rank 1 = 0.90, rank 2 = 0.85, ..., floor at 0.60
+            pos_score = max(0.90 - idx * 0.05, 0.60)
             results.append(SearchResult(
                 title=title,
                 url=url,
                 content=snippet,
                 source_type=platform,
-                score=0.75,
+                score=pos_score,
             ))
         if results:
             logger.info(f"[tavily] Serper fallback: {len(results)} results for '{query}' ({search_type})")

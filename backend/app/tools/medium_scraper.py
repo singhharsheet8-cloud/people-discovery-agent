@@ -171,9 +171,11 @@ async def _medium_rss_search(person_name: str, max_results: int) -> list[dict]:
 async def _search_provider_medium(person_name: str, max_results: int) -> list[dict]:
     """Search Google for Medium articles by or about this person."""
     # Two queries: article mentions and author profile page
+    handle_guess = person_name.lower().replace(" ", "")
     queries = [
         f'site:medium.com "{person_name}"',
-        f'site:medium.com "@{person_name.lower().replace(" ", "")}" OR "medium.com/@"',
+        # Search for the author profile page (not just articles mentioning the name)
+        f'site:medium.com/@{handle_guess}',
     ]
     results: list[dict] = []
     seen: set[str] = set()

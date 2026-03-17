@@ -1,6 +1,26 @@
 import logging
 from app.agent.state import AgentState
 
+
+def _format_date_field(val) -> str:
+    """Convert a date value from any format to a human-readable string.
+
+    HarvestAPI returns dates as dicts: {"month": 3, "year": 2021}
+    Other sources may return ISO strings ("2021-03") or plain years ("2021").
+    """
+    if not val:
+        return ""
+    if isinstance(val, dict):
+        year = val.get("year", "")
+        month = val.get("month", "")
+        if year and month:
+            _MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            month_str = _MONTHS[int(month)] if 1 <= int(month) <= 12 else str(month)
+            return f"{month_str} {year}"
+        return str(year) if year else ""
+    return str(val)
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,11 +44,12 @@ async def enrich_data(state: AgentState) -> dict:
         results=results,
     )
 
+    _MAX_PLATFORMS = 15  # Total supported platforms
     enrichment = {
         "career_timeline": timeline,
         "deduplicated_facts": deduped_facts,
         "source_platforms": list(platforms),
-        "source_diversity": len(platforms) / 12.0,
+        "source_diversity": min(len(platforms) / _MAX_PLATFORMS, 1.0),
         "image_url": image_url,
     }
 
@@ -89,8 +110,9 @@ def _extract_career_timeline(analysis: dict, results: list[dict]) -> list[dict]:
                             "type": "role",
                             "title": exp.get("title", ""),
                             "company": exp.get("companyName", exp.get("company", "")),
-                            "start_date": exp.get("startDate", ""),
-                            "end_date": exp.get("endDate", "Present"),
+                            # Use _format_date_field to handle HarvestAPI dict dates
+                            "start_date": _format_date_field(exp.get("startDate")),
+                            "end_date": _format_date_field(exp.get("endDate")) or "Present",
                             "description": (exp.get("description", "") or "")[:200],
                             "order": 2,
                         }

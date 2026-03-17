@@ -50,6 +50,10 @@ def _build_gap_fill_queries(
         (q.get("search_type", "web") if isinstance(q, dict) else "web")
         for q in planned_queries
     }
+    # Treat "crunchbase" and "crunchbase_dedicated" as the same for gap-fill purposes
+    # so we don't run both Tavily crunchbase search AND the dedicated crunchbase scraper
+    if "crunchbase" in covered:
+        covered.add("crunchbase_dedicated")
     name = input_data.get("name", "")
     company = input_data.get("company", "")
     if not name:
@@ -116,6 +120,10 @@ def _build_gap_fill_queries(
             extra.append({"query": handle,
                           "search_type": "instagram",
                           "rationale": "gap-fill: Instagram handle provided"})
+        else:
+            extra.append({"query": name,
+                          "search_type": "instagram",
+                          "rationale": "gap-fill: discover Instagram presence by name"})
     if "linkedin_profile" not in covered:
         linkedin_url = input_data.get("linkedin_url", "")
         if linkedin_url:
@@ -286,7 +294,7 @@ async def execute_searches(state: AgentState) -> dict:
 
             prioritized = list(dict.fromkeys(url for _, _, url in scored))
 
-            tier0 = [u for _, _, u in scored if _ == 0]
+            tier0 = [u for tier_val, _, u in scored if tier_val == 0]
             if tier0:
                 logger.info(f"[searcher] personal site(s) first: {tier0}")
 
@@ -305,11 +313,12 @@ async def execute_searches(state: AgentState) -> dict:
                         r_dict.setdefault("source_type", "personal_website")
                     elif url and _url_tier(url) == 1:
                         r_dict.setdefault("source_type", "web")
-                    st = r_dict.get("source_type", "firecrawl")
-                    dk = (url.split("?")[0].rstrip("/"), st)
-                    if url and dk not in seen_keys:
-                        seen_keys.add(dk)
-                        seen_urls.add(url)
+                    # Dedup on canonical URL only — source_type can differ between
+                    # Tavily ("web") and Firecrawl ("firecrawl") for the same page
+                    canon_url = url.split("?")[0].rstrip("/")
+                    if url and canon_url not in seen_urls:
+                        seen_urls.add(canon_url)
+                        seen_keys.add((canon_url, r_dict.get("source_type", "firecrawl")))
                         all_results.append(r_dict)
         except Exception as e:
             logger.warning(f"Firecrawl batch extract failed: {e}")
@@ -390,11 +399,13 @@ def _extract_social_handles(results: list[dict], seen_urls: set[str]) -> dict[st
     instagram_handle = ""
 
     twitter_patterns = [
-        re.compile(r'(?:twitter\.com|x\.com)/(@?[\w]{1,15})\b', re.I),
+        # Exclude /status/ paths to avoid capturing tweet IDs as handles
+        re.compile(r'(?:twitter\.com|x\.com)/(@?[\w]{1,15})(?!/status)\b', re.I),
         re.compile(r'@([\w]{1,15})\b.*(?:twitter|tweet|on X\b)', re.I),
     ]
     instagram_patterns = [
-        re.compile(r'instagram\.com/([\w.]{1,30})\b', re.I),
+        # Exclude path-only segments like /p/, /reel/, /stories/ that aren't usernames
+        re.compile(r'instagram\.com/(?!p/|reel/|stories/|explore/|accounts/)([\w.]{2,30})\b', re.I),
     ]
 
     skip_twitter = {"home", "search", "explore", "i", "intent", "share", "hashtag", "settings", "login", "signup"}
@@ -430,7 +441,7 @@ async def _with_timeout(coro, timeout: int = SEARCH_TIMEOUT):
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning(f"Search timed out after {timeout}s")
-        return []
+        return None  # None = timed out; [] = legitimately empty
 
 
 async def _run_tavily(query: str, search_type: str):
