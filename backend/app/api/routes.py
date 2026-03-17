@@ -467,6 +467,19 @@ async def _run_discovery(job_id: str, input_data: dict):
                 if profile.get("blog_url") and not person.blog_url:
                     person.blog_url = profile["blog_url"]
 
+                # Auto-populate social_links.website from personal_website sources (merge path)
+                for sr in result.get("search_results", []):
+                    if isinstance(sr, dict) and sr.get("source_type") == "personal_website":
+                        u = sr.get("url", "").split("?")[0].rstrip("/")
+                        if u and "linkedin.com" not in u:
+                            sl = person.get_json("social_links") or {}
+                            if not sl.get("website"):
+                                sl["website"] = u
+                                person.set_json("social_links", sl)
+                            if not person.blog_url:
+                                person.blog_url = u
+                            break
+
                 person.version += 1
                 person.updated_at = datetime.now(timezone.utc)
 
@@ -491,6 +504,26 @@ async def _run_discovery(job_id: str, input_data: dict):
                 if profile.get("blog_url"):
                     person.blog_url = profile["blog_url"]
                 session.add(person)
+
+            # ── Auto-populate social_links.website from personal_website sources ──
+            # Mirror pattern: LinkedIn URL goes into social_links.linkedin, so
+            # personal_website URL should go into social_links.website and blog_url.
+            personal_site_url = None
+            for sr in result.get("search_results", []):
+                if isinstance(sr, dict) and sr.get("source_type") == "personal_website":
+                    u = sr.get("url", "").split("?")[0].rstrip("/")
+                    if u and "linkedin.com" not in u:
+                        personal_site_url = u
+                        break
+            if personal_site_url:
+                # Merge into social_links.website
+                sl = person.get_json("social_links") or {}
+                if not sl.get("website"):
+                    sl["website"] = personal_site_url
+                    person.set_json("social_links", sl)
+                # Also populate blog_url if empty
+                if not person.blog_url:
+                    person.blog_url = personal_site_url
 
             await session.flush()
 
