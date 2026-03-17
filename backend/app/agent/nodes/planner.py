@@ -95,8 +95,17 @@ Generate 8-10 targeted search queries across all relevant platforms. Use direct 
     cost_tracker["planner"] = usage
 
     try:
-        plan = json.loads(response.content)
-        raw_queries = plan.get("queries", [])
+        import re as _re
+        content = response.content.strip()
+        fence_match = _re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if fence_match:
+            content = fence_match.group(1).strip()
+        plan = json.loads(content)
+        # LLM may return a bare list instead of {"queries": [...]}
+        if isinstance(plan, list):
+            raw_queries = plan
+        else:
+            raw_queries = plan.get("queries", []) if isinstance(plan, dict) else []
 
         has_linkedin_url = bool(input_data.get("linkedin_url"))
         name = input_data.get("name", "")

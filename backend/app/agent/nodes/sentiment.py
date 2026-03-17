@@ -56,7 +56,14 @@ async def analyze_sentiment(state: AgentState) -> dict:
         cost_tracker = dict(state.get("cost_tracker", {}))
         cost_tracker["sentiment"] = usage
 
-        result = json.loads(response.content)
+        import re as _re
+        content = response.content.strip()
+        fence_match = _re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if fence_match:
+            content = fence_match.group(1).strip()
+        result = json.loads(content)
+        if not isinstance(result, dict):
+            raise ValueError(f"Expected dict from sentiment LLM, got {type(result).__name__}")
         return {
             "sentiment": result,
             "cost_tracker": cost_tracker,

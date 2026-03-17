@@ -144,6 +144,8 @@ Only include facts that appear in the sources above."""
         if fence_match:
             content = fence_match.group(1).strip()
         analysis = json.loads(content)
+        if not isinstance(analysis, dict):
+            raise ValueError(f"Expected dict from analyzer LLM, got {type(analysis).__name__}")
     except (json.JSONDecodeError, ValueError):
         logger.warning("[analyzer] Failed to parse analyzer response")
         logger.debug(f"[analyzer] Raw response (first 500): {response.content[:500]}")

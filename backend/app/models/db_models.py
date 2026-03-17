@@ -125,7 +125,17 @@ class Person(Base):
         if field not in self._json_fields:
             raise ValueError(f"Unknown JSON field: {field}")
         val = getattr(self, field)
-        return json.loads(val) if val else None
+        if not val:
+            return None
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            import logging
+            logging.getLogger(__name__).warning(
+                "get_json: corrupted JSON in field '%s' for person %s — returning None",
+                field, getattr(self, "id", "?"),
+            )
+            return None
 
 
 class PersonSource(Base):
@@ -167,7 +177,12 @@ class SearchCache(Base):
         return now > exp
 
     def get_results(self) -> list[dict]:
-        return json.loads(self.response_data)
+        if not self.response_data:
+            return []
+        try:
+            return json.loads(self.response_data)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
     def set_results(self, results: list[dict]) -> None:
         self.response_data = json.dumps(results)

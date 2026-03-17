@@ -69,7 +69,7 @@ async def list_webhooks(_admin=Depends(require_admin)):
             {
                 "id": e.id,
                 "url": e.url,
-                "events": json.loads(e.events),
+                "events": json.loads(e.events) if e.events else [],
                 "active": e.active,
                 "created_at": e.created_at.isoformat(),
             }

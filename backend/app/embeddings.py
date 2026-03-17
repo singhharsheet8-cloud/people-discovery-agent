@@ -100,6 +100,8 @@ async def generate_embedding(text_input: str) -> list[float]:
         model=EMBEDDING_MODEL,
         input=text_input,
     )
+    if not response.data:
+        raise ValueError(f"OpenAI embeddings returned empty data for input length {len(text_input)}")
     return response.data[0].embedding
 
 

@@ -243,6 +243,8 @@ IMPORTANT REMINDERS:
         if fence_match:
             content = fence_match.group(1).strip()
         profile = json.loads(content)
+        if not isinstance(profile, dict):
+            raise ValueError(f"Expected dict from synthesizer LLM, got {type(profile).__name__}")
     except (json.JSONDecodeError, IndexError, ValueError) as e:
         logger.error(f"Failed to parse synthesis response: {e}")
         logger.error(f"Raw response (first 1000 chars): {response.content[:1000]}")

@@ -160,6 +160,9 @@ async def disambiguate_identity(state: AgentState) -> dict[str, Any]:
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         llm_output = json.loads(raw)
+        # Guard: LLM must return a dict; a list means wrong format
+        if not isinstance(llm_output, dict):
+            raise ValueError(f"Expected dict from LLM, got {type(llm_output).__name__}")
     except Exception as exc:
         logger.warning("[disambiguate] LLM call failed (%s), falling back to heuristic gate", exc)
         llm_output = _heuristic_fallback(input_data, search_results)

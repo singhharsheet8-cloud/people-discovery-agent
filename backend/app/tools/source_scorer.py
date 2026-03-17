@@ -186,7 +186,11 @@ async def _score_batch(
         if text.startswith("```"):
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         raw = json.loads(text)
-        scored = raw.get("scores", [])
+        # LLM may return bare list or {"scores": [...]}
+        if isinstance(raw, list):
+            scored = raw
+        else:
+            scored = raw.get("scores", []) if isinstance(raw, dict) else []
         return _merge_with_defaults(results, scored, target.get("name", ""))
 
     except Exception as exc:
