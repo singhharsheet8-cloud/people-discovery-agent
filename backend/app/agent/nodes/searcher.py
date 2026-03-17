@@ -220,54 +220,91 @@ async def execute_searches(state: AgentState) -> dict:
 
     if urls_for_firecrawl:
         try:
-            # Detect personal websites in results — these must be scraped first
-            # because they contain the most accurate info about the person
-            # and are identity-safe (the site belongs to the person).
-            _PLATFORM_DOMAINS = frozenset({
-                "linkedin.com", "twitter.com", "x.com", "github.com",
-                "facebook.com", "instagram.com", "medium.com", "substack.com",
-                "wikipedia.org", "youtube.com", "crunchbase.com",
-                "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
-                "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
-            })
             import urllib.parse as _urlparse
 
-            def _is_personal_site_url(url: str) -> bool:
+            # ── Domain classification ────────────────────────────────────────────
+            # People-aggregators: contain info about the person but are scraped
+            # already as structured sources; Firecrawl adds little value.
+            _AGGREGATORS = frozenset({
+                "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
+                "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
+                "nubela.co", "clay.com", "hunter.io", "clearbit.com",
+                "signalhire.com", "contactout.com", "lusha.com",
+            })
+
+            def _url_tier(url: str) -> int:
+                """
+                Return a priority tier for Firecrawl scraping (lower = higher priority).
+
+                Tier 0 — Personal website / portfolio (identity-safe, richest source)
+                Tier 1 — Blog posts, podcast episodes, interviews, news articles
+                Tier 2 — Wikipedia, GitHub, company pages, Crunchbase
+                Tier 3 — Generic web (everything else)
+                Tier 99 — Skip (blocked social platforms or people-aggregators)
+                """
+                if _is_blocked_domain(url):
+                    return 99
                 try:
                     host = _urlparse.urlparse(url).hostname or ""
+                    path = _urlparse.urlparse(url).path.lower()
                 except Exception:
-                    return False
-                return (
-                    bool(host)
-                    and not _is_blocked_domain(url)
-                    and not any(d in host for d in _PLATFORM_DOMAINS)
-                    and len(host.split(".")) <= 3  # not a deep subdomain aggregator
+                    return 3
+
+                if any(a in host for a in _AGGREGATORS):
+                    return 99  # already covered by structured data; skip
+
+                # Known high-signal domains
+                if host in ("en.wikipedia.org", "github.com", "crunchbase.com"):
+                    return 2
+
+                # Podcast/blog/interview/news indicators in URL path
+                _CONTENT_SIGNALS = (
+                    "/episodes/", "/podcast/", "/blog/", "/post/", "/article/",
+                    "/interview/", "/profile/", "/person/", "/speaker/",
+                    "/about", "/bio", "/people/",
                 )
+                if any(sig in path for sig in _CONTENT_SIGNALS):
+                    return 1
 
-            personal_sites = [u for u in urls_for_firecrawl if _is_personal_site_url(u)]
-            other_sites = [u for u in urls_for_firecrawl
-                           if not _is_blocked_domain(u) and u not in personal_sites]
+                # Short domain = likely personal site (e.g. vidyadhar.xyz, anujrathi.com)
+                parts = host.split(".")
+                if len(parts) <= 3 and not any(a in host for a in _AGGREGATORS):
+                    return 0
 
-            # Always scrape all personal sites first (they are identity-safe and
-            # may contain bio, photos, and links not found elsewhere).
-            # Fill remaining slots (up to 8 total) with other non-blocked URLs.
-            prioritized = personal_sites + other_sites
-            prioritized = list(dict.fromkeys(prioritized))  # preserve order, dedup
+                return 3
 
-            if personal_sites:
-                logger.info(
-                    f"[searcher] personal site(s) detected — scraping first: "
-                    + ", ".join(personal_sites)
-                )
+            # ── Build prioritized scrape list ────────────────────────────────────
+            # Sort by tier, then preserve original rank order within each tier.
+            # Cap at 10 URLs — Firecrawl scrapes them in parallel so 10 ≈ same
+            # latency as 8 but gives much better recall.
+            scored = []
+            for i, url in enumerate(urls_for_firecrawl):
+                tier = _url_tier(url)
+                if tier < 99:
+                    scored.append((tier, i, url))
+            scored.sort()
 
-            deep_results = await _with_timeout(batch_extract(prioritized[:8]))
+            prioritized = list(dict.fromkeys(url for _, _, url in scored))
+
+            tier0 = [u for _, _, u in scored if _ == 0]
+            if tier0:
+                logger.info(f"[searcher] personal site(s) first: {tier0}")
+
+            logger.info(
+                f"[searcher] Firecrawl scraping {min(len(prioritized),10)}/{len(urls_for_firecrawl)} URLs "
+                f"(tiers: {[t for t,_,_ in scored[:10]]})"
+            )
+
+            deep_results = await _with_timeout(batch_extract(prioritized[:10]), timeout=60)
             if deep_results and not isinstance(deep_results, Exception):
                 for r in deep_results:
                     r_dict = r if isinstance(r, dict) else r
                     url = r_dict.get("url", "")
-                    # Tag personal website results with a specific source_type
-                    if url and _is_personal_site_url(url):
+                    # Tag personal/portfolio pages clearly
+                    if url and _url_tier(url) == 0:
                         r_dict.setdefault("source_type", "personal_website")
+                    elif url and _url_tier(url) == 1:
+                        r_dict.setdefault("source_type", "web")
                     st = r_dict.get("source_type", "firecrawl")
                     dk = (url.split("?")[0].rstrip("/"), st)
                     if url and dk not in seen_keys:
@@ -397,7 +434,7 @@ async def _with_timeout(coro, timeout: int = SEARCH_TIMEOUT):
 
 
 async def _run_tavily(query: str, search_type: str):
-    return await search_tavily(query, search_type=search_type, max_results=5)
+    return await search_tavily(query, search_type=search_type, max_results=10)
 
 
 async def _run_linkedin_profile(url: str):

@@ -104,11 +104,12 @@ async def extract_page_content(url: str) -> dict:
 
 
 async def batch_extract(
-    urls: list[str], max_pages: int = 8
+    urls: list[str], max_pages: int = 10
 ) -> list[dict]:
     """Extract multiple pages in parallel.
 
     Deduplicates URLs and skips known-blocked domains automatically.
+    Default raised from 8 → 10 to match top-10 result scraping strategy.
     """
     # Deduplicate while preserving order
     seen: set[str] = set()

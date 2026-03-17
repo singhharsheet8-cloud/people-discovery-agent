@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v7"  # bumped: personal website og:image tier added
+_CACHE_TOOL = "image_resolver_v8"  # bumped: scan top-10 web pages for portraits
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -380,24 +380,56 @@ def _extract_portrait_page_urls(
     results: list[dict], personal_website_url: str | None
 ) -> list[str]:
     """
-    Build an ordered list of non-platform URLs to scan for the person's portrait.
+    Build an ordered list of non-platform page URLs to scan for the person's portrait.
 
-    Priority:
-      1. Personal website (own domain) — most identity-safe
-      2. Podcast/interview/blog pages that feature the person
-         (e.g. sbw.hvj.coach/episodes/vidyadhar, anchor.fm, spotify episode pages)
-      3. Other high-relevance web sources
+    Covers three source categories:
+      Tier 0 — Personal website / portfolio (own domain, identity-safe)
+      Tier 1 — Content pages: podcast episodes, blog posts, interviews, news articles
+               that feature the person (contain their headshot as a guest/author)
+      Tier 2 — Everything else that isn't a blocked social platform or aggregator
 
-    All LinkedIn/Twitter/Facebook/Instagram/job-board URLs are excluded.
+    LinkedIn, Twitter, Facebook, Instagram and people-aggregator URLs are excluded
+    because Firecrawl can't scrape them and they don't reliably show a headshot.
+
+    Preference within each tier: source_type=personal_website/firecrawl/web first
+    (these are already scraped, so httpx fetch in _personal_website_og_image is
+    cheap/cached), then unscraped URLs.
     """
     _EXCLUDED = frozenset({
         "linkedin.com", "twitter.com", "x.com", "github.com", "facebook.com",
         "instagram.com", "youtube.com", "wikipedia.org", "serpapi.com",
-        # People aggregators — they don't show a headshot of the right person
+        # People aggregators — scraped for data already; no headshot of correct person
         "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
         "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
         "nubela.co", "clay.com", "hunter.io", "clearbit.com",
+        "signalhire.com", "contactout.com", "lusha.com",
     })
+
+    _CONTENT_PATH_SIGNALS = (
+        "/episodes/", "/podcast/", "/blog/", "/post/", "/article/",
+        "/interview/", "/speaker/", "/about", "/bio", "/people/", "/profile/",
+        "/guests/", "/cast/", "/team/",
+    )
+
+    def _tier(r: dict) -> int:
+        url = r.get("url", "")
+        st = r.get("source_type", "web")
+        try:
+            host = urllib.parse.urlparse(url).hostname or ""
+            path = urllib.parse.urlparse(url).path.lower()
+        except Exception:
+            return 99
+        if not host or any(d in host for d in _EXCLUDED):
+            return 99
+        if st == "personal_website" or len(host.split(".")) <= 2:
+            return 0
+        if st in ("firecrawl", "web", "news", "podcast") and any(
+            sig in path for sig in _CONTENT_PATH_SIGNALS
+        ):
+            return 1
+        if st in ("firecrawl", "web", "news", "podcast"):
+            return 2
+        return 3
 
     def _is_ok(url: str) -> bool:
         if not url or not url.startswith("http"):
@@ -417,20 +449,24 @@ def _extract_portrait_page_urls(
             seen.add(key)
             ordered.append(key)
 
-    # 1. Personal website first
+    # Tier 0: personal website always first
     if personal_website_url:
         _add(personal_website_url)
 
-    # 2. All non-excluded web/news sources, sorted by relevance
+    # Sort all results by tier then relevance score
     scored = []
     for r in results:
         url = r.get("url", "")
         if not _is_ok(url):
             continue
+        t = _tier(r)
+        if t == 99:
+            continue
         score = float(r.get("relevance_score", r.get("confidence", 0.5)) or 0.5)
-        scored.append((score, url))
-    scored.sort(reverse=True)
-    for _, url in scored:
+        scored.append((t, -score, url))  # sort by tier ASC, score DESC
+    scored.sort()
+
+    for _, _, url in scored:
         _add(url)
 
     return ordered
@@ -513,16 +549,21 @@ def _extract_personal_website_url(results: list[dict]) -> str | None:
 
 async def _scan_portrait_pages(urls: list[str], name: str) -> str | None:
     """
-    Scan a list of web pages (personal site, podcast episodes, blog posts) for
-    the person's portrait image.
+    Scan up to 10 non-platform web pages for the person's portrait image.
 
-    Tries each URL sequentially, returns the first portrait-quality image found.
-    Caps at 5 URLs to avoid excessive latency.
+    Pages are already prioritized by _extract_portrait_page_urls (personal site
+    first, then podcast/blog/interview pages, then other web sources).
+
+    Uses httpx directly — no Firecrawl credits consumed.
+    Stops as soon as a portrait-quality image is found.
     """
-    for url in urls[:5]:
-        result = await _personal_website_og_image(url)
-        if result:
-            return result
+    for url in urls[:10]:
+        try:
+            result = await _personal_website_og_image(url)
+            if result:
+                return result
+        except Exception as e:
+            logger.debug(f"[image] portrait scan failed for {url}: {e}")
     return None
 
 
