@@ -220,14 +220,54 @@ async def execute_searches(state: AgentState) -> dict:
 
     if urls_for_firecrawl:
         try:
-            # Prioritize non-blocked, content-rich domains (news, blogs, crunchbase)
-            # and cap at 8 to get more coverage while respecting Firecrawl limits
-            prioritized = [u for u in urls_for_firecrawl if not _is_blocked_domain(u)]
+            # Detect personal websites in results — these must be scraped first
+            # because they contain the most accurate info about the person
+            # and are identity-safe (the site belongs to the person).
+            _PLATFORM_DOMAINS = frozenset({
+                "linkedin.com", "twitter.com", "x.com", "github.com",
+                "facebook.com", "instagram.com", "medium.com", "substack.com",
+                "wikipedia.org", "youtube.com", "crunchbase.com",
+                "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
+                "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
+            })
+            import urllib.parse as _urlparse
+
+            def _is_personal_site_url(url: str) -> bool:
+                try:
+                    host = _urlparse.urlparse(url).hostname or ""
+                except Exception:
+                    return False
+                return (
+                    bool(host)
+                    and not _is_blocked_domain(url)
+                    and not any(d in host for d in _PLATFORM_DOMAINS)
+                    and len(host.split(".")) <= 3  # not a deep subdomain aggregator
+                )
+
+            personal_sites = [u for u in urls_for_firecrawl if _is_personal_site_url(u)]
+            other_sites = [u for u in urls_for_firecrawl
+                           if not _is_blocked_domain(u) and u not in personal_sites]
+
+            # Always scrape all personal sites first (they are identity-safe and
+            # may contain bio, photos, and links not found elsewhere).
+            # Fill remaining slots (up to 8 total) with other non-blocked URLs.
+            prioritized = personal_sites + other_sites
+            prioritized = list(dict.fromkeys(prioritized))  # preserve order, dedup
+
+            if personal_sites:
+                logger.info(
+                    f"[searcher] personal site(s) detected — scraping first: "
+                    + ", ".join(personal_sites)
+                )
+
             deep_results = await _with_timeout(batch_extract(prioritized[:8]))
             if deep_results and not isinstance(deep_results, Exception):
                 for r in deep_results:
                     r_dict = r if isinstance(r, dict) else r
                     url = r_dict.get("url", "")
+                    # Tag personal website results with a specific source_type
+                    if url and _is_personal_site_url(url):
+                        r_dict.setdefault("source_type", "personal_website")
                     st = r_dict.get("source_type", "firecrawl")
                     dk = (url.split("?")[0].rstrip("/"), st)
                     if url and dk not in seen_keys:

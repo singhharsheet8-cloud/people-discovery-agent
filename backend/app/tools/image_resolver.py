@@ -17,15 +17,18 @@ Identity problem (why we go wrong):
     feedshare/post/background/shrink paths
 
 Tiers (stops at first confirmed, identity+quality validated hit):
-  1. In-memory structured data  — Apify LinkedIn profilePicUrl, GitHub avatar
-                                  → ZERO extra API calls, most trustworthy
-  2a. Firecrawl og:image scrape — extract og:image from the LinkedIn profile
-                                   page URL if we have one — no Apify needed
-  2b. Apify LinkedIn scrape     — fallback if Apify credits available
-  3. Wikipedia REST API         — free, curated portrait for public figures
-  4. SerpAPI Knowledge Graph    — Google knowledge panel image
-  5. SerpAPI Google Images      — STRICT: only profile-displayphoto CDN URLs
-  6. SerpAPI organic thumbnail  — LinkedIn search result thumbnail only
+  1.  In-memory structured data  — Apify LinkedIn profilePicUrl, GitHub avatar
+                                   → ZERO extra API calls, most trustworthy
+  1b. Personal website og:image  — scrape the person's own website (vidyadhar.xyz,
+                                   personal blog, portfolio). IDENTITY-SAFE because
+                                   the site belongs to the person. HIGH PRIORITY.
+  2a. Firecrawl og:image scrape  — extract og:image from the LinkedIn profile
+                                    page URL if we have one — no Apify needed
+  2b. Apify LinkedIn scrape      — fallback if Apify credits available
+  3.  Wikipedia REST API          — free, curated portrait for public figures
+  4.  SerpAPI Knowledge Graph     — Google knowledge panel image
+  5.  SerpAPI Google Images       — STRICT: only profile-displayphoto CDN URLs
+  6.  SerpAPI organic thumbnail   — LinkedIn search result thumbnail only
 
 Quality gates applied to every candidate URL:
   - HTTP 200 + Content-Type: image/*
@@ -67,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v6"  # bumped: stronger identity disambiguation
+_CACHE_TOOL = "image_resolver_v7"  # bumped: personal website og:image tier added
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -136,9 +139,17 @@ async def resolve_profile_image(
     # Extract LinkedIn profile URL from search results for Firecrawl
     linkedin_profile_url = _extract_linkedin_profile_url(results)
 
+    # Extract personal website URL — identity-safe, highest fidelity after structured data
+    personal_website_url = _extract_personal_website_url(results)
+
     tiers: list[tuple[str, asyncio.coroutine]] = [
         # T1: profilePicUrl already in structured data — free, identity-safe
         ("T1-structured",          _async(lambda: _extract_from_sources(results))),
+        # T1b: Personal website og:image — scrape the person's own site (portfolio,
+        #      blog, personal page). IDENTITY-SAFE: the site belongs to the person.
+        #      Comes before LinkedIn/Apify because personal sites almost always show
+        #      the right headshot with no ambiguity.
+        ("T1b-personal-website",   _personal_website_og_image(personal_website_url)),
         # T2a: Firecrawl og:image — scrape LinkedIn profile page for og:image tag
         #      Works without Apify credits; identity-safe (right profile URL)
         ("T2a-firecrawl-og",       _firecrawl_og_image(linkedin_profile_url)),
@@ -360,6 +371,174 @@ def _extract_linkedin_profile_url(results: list[dict]) -> str | None:
             best_url = url.split("?")[0].rstrip("/")
 
     return best_url
+
+
+def _extract_personal_website_url(results: list[dict]) -> str | None:
+    """
+    Extract the person's personal website URL from search results or structured data.
+
+    Looks in three places (in priority order):
+      1. social_links.website in structured source data (most reliable)
+      2. Organic web results whose domain doesn't match any blocked/known platform
+         but DOES appear in the search result title with the person's name
+      3. Any result with source_type == "personal_website"
+
+    Excludes: LinkedIn, Twitter, GitHub, Facebook, Instagram, Medium, Substack,
+    Wikipedia, company career pages, job boards (getprog, weekday, topline, etc.)
+    """
+    _PLATFORM_DOMAINS = frozenset({
+        "linkedin.com", "twitter.com", "x.com", "github.com", "facebook.com",
+        "instagram.com", "medium.com", "substack.com", "wikipedia.org",
+        "youtube.com", "crunchbase.com", "angellist.com", "wellfound.com",
+        # Job boards and people-aggregators
+        "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
+        "zoominfo.com", "apollo.io", "signalhire.com", "nubela.co",
+        "clay.com", "hunter.io", "clearbit.com", "pdl.com",
+    })
+
+    def _is_personal_site(url: str) -> bool:
+        if not url or not url.startswith("http"):
+            return False
+        try:
+            host = urllib.parse.urlparse(url).hostname or ""
+        except Exception:
+            return False
+        return not any(d in host for d in _PLATFORM_DOMAINS)
+
+    # 1. social_links.website from structured data
+    for r in results:
+        structured = r.get("structured", {})
+        if isinstance(structured, dict):
+            links = structured.get("social_links", {}) or {}
+            if isinstance(links, dict):
+                website = links.get("website") or links.get("personal_site") or links.get("blog")
+                if website and _is_personal_site(website):
+                    return website.split("?")[0].rstrip("/")
+
+    # 2. source_type == "personal_website"
+    for r in results:
+        if r.get("source_type") == "personal_website":
+            url = r.get("url", "")
+            if _is_personal_site(url):
+                return url.split("?")[0].rstrip("/")
+
+    # 3. Organic web results that look like a personal site
+    # Heuristic: domain is short (≤ 2 parts after TLD), no path depth, not a platform
+    personal_candidates = []
+    for r in results:
+        url = r.get("url", "")
+        if not _is_personal_site(url):
+            continue
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.hostname or ""
+            parts = host.split(".")
+            path = parsed.path.strip("/")
+        except Exception:
+            continue
+        # Personal sites tend to have short domains, no deep paths
+        if len(parts) <= 3 and len(path.split("/")) <= 2:
+            score = r.get("relevance_score", r.get("confidence", 0.0)) or 0.0
+            personal_candidates.append((float(score), url))
+
+    if personal_candidates:
+        personal_candidates.sort(reverse=True)
+        return personal_candidates[0][1].split("?")[0].rstrip("/")
+
+    return None
+
+
+async def _personal_website_og_image(website_url: str | None) -> str | None:
+    """
+    Scrape the person's personal website for an og:image or the first portrait-shaped
+    image. IDENTITY-SAFE: the site belongs to the person.
+
+    Strategy (no Firecrawl key required):
+      1. Fetch the page with httpx (follows redirects)
+      2. Extract og:image meta tag → highest priority
+      3. Extract all <img src> tags, prefer those with 'portrait', 'photo', 'avatar',
+         'profile', 'headshot', 'face', 'about' in the URL or alt text
+      4. Validate each candidate through _validate_image
+    """
+    if not website_url:
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=10,
+            follow_redirects=True,
+            verify=_SSL_CONTEXT,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; PeopleDiscoveryAgent/2.0)"},
+        ) as client:
+            resp = await client.get(website_url)
+            if resp.status_code != 200:
+                logger.debug(f"[image] personal website {website_url} returned {resp.status_code}")
+                return None
+
+            html = resp.text
+
+        candidates: list[str] = []
+
+        # 1. og:image meta tag — highest priority
+        og = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE,
+        ) or re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            html, re.IGNORECASE,
+        )
+        if og:
+            url = og.group(1).strip()
+            if url.startswith("http"):
+                candidates.append(url)
+            elif url.startswith("/"):
+                base = urllib.parse.urlparse(website_url)
+                candidates.append(f"{base.scheme}://{base.netloc}{url}")
+
+        # 2. twitter:image meta
+        tw = re.search(
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE,
+        )
+        if tw:
+            url = tw.group(1).strip()
+            if url.startswith("http"):
+                candidates.append(url)
+
+        # 3. <img> tags with portrait-suggesting keywords in src or alt
+        _PORTRAIT_HINTS = ("portrait", "photo", "avatar", "profile", "headshot",
+                           "face", "about", "me", "selfie", "pic")
+        img_tags = re.findall(
+            r'<img[^>]+(?:src|srcset)=["\']([^"\']+)["\'][^>]*(?:alt=["\']([^"\']*)["\'])?',
+            html, re.IGNORECASE,
+        )
+        for src, alt in img_tags:
+            # Take first URL from srcset
+            src = src.split()[0].strip()
+            if not src.startswith("http") and not src.startswith("/"):
+                continue
+            combined = (src + " " + alt).lower()
+            if any(h in combined for h in _PORTRAIT_HINTS):
+                if src.startswith("/"):
+                    base = urllib.parse.urlparse(website_url)
+                    src = f"{base.scheme}://{base.netloc}{src}"
+                if src.startswith("http"):
+                    candidates.append(src)
+
+        logger.debug(f"[image] personal website {website_url}: {len(candidates)} candidate(s)")
+
+        # Validate each candidate
+        for url in candidates:
+            ok, reason = await _validate_image(url)
+            if ok:
+                logger.info(f"[image] T1b-personal-website: {url[:80]} from {website_url}")
+                return url
+            logger.debug(f"[image] personal website candidate rejected ({reason}): {url[:80]}")
+
+    except Exception as e:
+        logger.debug(f"[image] personal website scrape failed for {website_url}: {e}")
+
+    return None
 
 
 # ---------------------------------------------------------------------------
