@@ -157,7 +157,7 @@ async def semantic_search(
     stmt = text(
         """
         SELECT
-            id, name, current_role, company, location, bio,
+            id, name, "current_role", company, location, bio,
             confidence_score, reputation_score, status,
             image_url, updated_at,
             1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
