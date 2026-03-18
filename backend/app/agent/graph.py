@@ -43,10 +43,7 @@ iterative_enrich  ◄───────────────────�
   └── "enrichment_done"
         │
         ▼
-  analyze_sentiment      — tone, influence scoring
-        │
-        ▼
-  synthesize_profile     — final JSON profile
+  synthesize_profile     — sentiment (inline, concurrent) + final JSON profile
         │
         ▼
   verify_profile         — strip hallucinated facts/career not in sources
