@@ -248,24 +248,41 @@ export default function StalenessPage() {
             </div>
           )}
 
+          {/* Cost estimate */}
+          {data && (
+            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5">
+              <h3 className="text-sm font-semibold text-yellow-400 mb-2 flex items-center gap-2">
+                <Zap size={14} /> Cost Estimate
+              </h3>
+              <p className="text-xs text-yellow-300/70 leading-relaxed">
+                At current settings: <strong className="text-yellow-300">{data.batch_size} profile/day</strong> auto-refreshed
+                × ~$0.05–0.10 per discovery = <strong className="text-yellow-300">~${(data.batch_size * 0.075 * 30).toFixed(2)}/month</strong> in API costs.
+                Each discovery hits Tavily, Groq, OpenAI, and Firecrawl — only refresh profiles that are worth the spend.
+                Low-confidence profiles (&lt;50%) are skipped automatically.
+              </p>
+            </div>
+          )}
+
           {/* Config summary */}
           <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
             <h3 className="text-sm font-semibold text-white mb-3">Configuration</h3>
             <div className="grid grid-cols-2 gap-3 text-xs">
-              {[
-                ["STALE_AFTER_DAYS", `${data.stale_after_days} days`],
-                ["REFRESH_COOLDOWN_DAYS", `${data.refresh_cooldown_days} days`],
-                ["STALENESS_BATCH_SIZE", `${data.batch_size} persons/tick`],
-                ["STALENESS_CRON_INTERVAL", `${data.cron_interval_seconds}s (${cronHours}h)`],
-              ].map(([key, val]) => (
+              {data && [
+                ["STALE_AFTER_DAYS", `${data.stale_after_days} days`, "Profile age before auto-refresh"],
+                ["REFRESH_COOLDOWN_DAYS", `${data.refresh_cooldown_days} days`, "Min gap between refreshes"],
+                ["STALENESS_BATCH_SIZE", `${data.batch_size} per tick`, "Max refreshes per cron run"],
+                ["STALENESS_CRON_INTERVAL", `${data.cron_interval_seconds}s (${cronHours}h)`, "How often the cron runs"],
+              ].map(([key, val, hint]) => (
                 <div key={key} className="flex flex-col gap-0.5">
                   <code className="text-gray-500">{key}</code>
                   <span className="text-gray-300 font-medium">{val}</span>
+                  <span className="text-gray-600">{hint}</span>
                 </div>
               ))}
             </div>
-            <p className="text-xs text-gray-600 mt-3">
-              Set these environment variables on Railway to tune the refresh schedule.
+            <p className="text-xs text-gray-600 mt-4 border-t border-white/5 pt-3">
+              Set these as Railway environment variables. Conservative defaults keep costs near zero.
+              Only profiles with confidence ≥ 50% are auto-refreshed.
             </p>
           </div>
 
