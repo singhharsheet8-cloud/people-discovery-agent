@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v13"  # target_name threaded to _validate_image; social_links injected
+_CACHE_TOOL = "image_resolver_v14"  # name-in-URL filter for article pages prevents namesake images
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -175,7 +175,7 @@ async def resolve_profile_image(
 
     # Also collect all non-platform web source URLs to scan for portraits
     # (podcast/interview/blog pages about the person also contain their headshot)
-    portrait_page_urls = _extract_portrait_page_urls(results, personal_website_url)
+    portrait_page_urls = _extract_portrait_page_urls(results, personal_website_url, name=name)
 
     tiers: list[tuple[str, asyncio.coroutine]] = [
         # T1: profilePicUrl already in structured data — free, identity-safe
@@ -418,7 +418,7 @@ def _extract_linkedin_profile_url(results: list[dict]) -> str | None:
 
 
 def _extract_portrait_page_urls(
-    results: list[dict], personal_website_url: str | None
+    results: list[dict], personal_website_url: str | None, name: str | None = None
 ) -> list[str]:
     """
     Build an ordered list of non-platform page URLs to scan for the person's portrait.
@@ -432,10 +432,18 @@ def _extract_portrait_page_urls(
     LinkedIn, Twitter, Facebook, Instagram and people-aggregator URLs are excluded
     because Firecrawl can't scrape them and they don't reliably show a headshot.
 
+    For Tier 1/2 (article pages), the person's name tokens must appear in the page URL
+    to avoid pulling headshots from namesake articles (e.g. cricketer vs tech exec).
+    Tier 0 (personal website) is always identity-safe and exempt from this filter.
+
     Preference within each tier: source_type=personal_website/firecrawl/web first
     (these are already scraped, so httpx fetch in _personal_website_og_image is
     cheap/cached), then unscraped URLs.
     """
+    # Pre-compute name tokens for URL-level identity check on article pages
+    _name_tokens: list[str] = []
+    if name:
+        _name_tokens = [t.lower() for t in name.split() if len(t) > 2]
     _EXCLUDED = frozenset({
         "linkedin.com", "twitter.com", "x.com", "github.com", "facebook.com",
         "instagram.com", "youtube.com", "wikipedia.org", "serpapi.com",
@@ -473,8 +481,17 @@ def _extract_portrait_page_urls(
             return 99
         if not host or any(d in host for d in _EXCLUDED):
             return 99
+        # Tier 0: personal website — always identity-safe, no name check needed
         if st == "personal_website" or len(host.split(".")) <= 2:
             return 0
+        # For article/web pages (Tier 1+), require the person's name to appear in
+        # the URL path to avoid pulling images from namesake articles.
+        if _name_tokens:
+            url_lower = (path + " " + host).lower()
+            tokens_found = sum(1 for t in _name_tokens if t in url_lower)
+            if tokens_found < max(1, len(_name_tokens) - 1):
+                # Not enough name tokens in the URL — skip (namesake risk)
+                return 99
         if st in ("firecrawl", "web", "news", "podcast") and any(
             sig in path for sig in _CONTENT_PATH_SIGNALS
         ):
