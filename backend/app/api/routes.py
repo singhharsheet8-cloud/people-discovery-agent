@@ -31,6 +31,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
+async def _set_job_step(job_id: str, step: str) -> None:
+    """Write the current pipeline step to the DB so the frontend can poll it."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            job = (await session.execute(
+                select(DiscoveryJob).where(DiscoveryJob.id == job_id)
+            )).scalar_one_or_none()
+            if job:
+                job.current_step = step
+                await session.commit()
+    except Exception:
+        pass  # Never crash the pipeline over a step-tracking failure
+
+
 # --- Request/Response models ---
 
 class DiscoverRequest(BaseModel):
@@ -113,10 +128,12 @@ class PersonDetail(BaseModel):
     skills: list | None = None
     projects: list | None = None
     recommendations: list | None = None
+    languages: list | None = None
     followers_count: int | None = None
     blog_url: str | None = None
     confidence_score: float = 0.0
     reputation_score: float | None = None
+    influence_score: float | None = None
     status: str = "discovered"
     version: int = 1
     sources: list[dict] = []
@@ -379,7 +396,33 @@ async def _run_discovery(job_id: str, input_data: dict):
             "abort_reason": None,
         }
 
-        result = await graph.ainvoke(initial_state)
+        # Stream node completions so we can write current_step to the DB in real time.
+        # LangGraph's astream_events yields events per node; we update the job row
+        # after each node completes so the frontend polling sees live progress.
+        _STEP_LABELS: dict[str, str] = {
+            "plan_searches":            "planning",
+            "execute_searches":         "searching",
+            "disambiguate":             "disambiguating",
+            "filter_results":           "filtering",
+            "analyze_results":          "analyzing",
+            "enrich_data":              "enriching",
+            "iterative_enrich":         "iterating",
+            "generate_targeted_queries":"refining",
+            "analyze_sentiment":        "scoring_sentiment",
+            "synthesize_profile":       "synthesizing",
+            "verify_profile":           "verifying",
+        }
+        result = None
+        async for event in graph.astream_events(initial_state, version="v2"):
+            kind = event.get("event", "")
+            node = event.get("name", "")
+            if kind == "on_chain_start" and node in _STEP_LABELS:
+                await _set_job_step(job_id, _STEP_LABELS[node])
+            elif kind == "on_chain_end" and node == "LangGraph":
+                result = event.get("data", {}).get("output", {})
+
+        if result is None:
+            result = {}
         profile = result.get("person_profile", {})
 
         _MIN_SAVE_CONFIDENCE = 0.35
@@ -728,6 +771,7 @@ async def get_job(job_id: str, _auth=Depends(require_api)):
             "id": job.id,
             "person_id": job.person_id,
             "status": job.status,
+            "current_step": job.current_step,
             "input_params": json.loads(job.input_params) if job.input_params else {},
             "cost_breakdown": json.loads(job.cost_breakdown) if job.cost_breakdown else None,
             "total_cost": job.total_cost,
@@ -1427,8 +1471,25 @@ async def get_sentiment_analysis(person_id: str, _auth=Depends(require_viewer)):
         )
         sources = sources_result.scalars().all()
 
+        # Return cached sentiment if available and not requesting a refresh
+        cached_sentiment = person.get_json("sentiment_data")
+        if cached_sentiment and not isinstance(cached_sentiment, dict):
+            cached_sentiment = None
+
+        if cached_sentiment:
+            return cached_sentiment
+
         profile = _person_to_dict_for_intelligence(person, sources)
         result = await analyze_sentiment(profile)
+
+        # Persist sentiment result to DB for future fast retrieval
+        if result and "error" not in result:
+            try:
+                person.set_json("sentiment_data", result)
+                await session.commit()
+            except Exception as e:
+                logger.warning(f"Failed to cache sentiment for person {person_id}: {e}")
+
         return result
 
 
@@ -1443,6 +1504,14 @@ async def get_influence_score(person_id: str, _auth=Depends(require_viewer)):
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
 
+        # Return cached influence score if already computed
+        if person.influence_score is not None:
+            return {
+                "overall_influence_score": person.influence_score,
+                "_cached": True,
+                "_note": "Cached score. Re-fetch person to trigger recomputation.",
+            }
+
         sources_result = await session.execute(
             select(PersonSource).where(PersonSource.person_id == person_id)
         )
@@ -1450,6 +1519,18 @@ async def get_influence_score(person_id: str, _auth=Depends(require_viewer)):
 
         profile = _person_to_dict_for_intelligence(person, sources)
         result = await calculate_influence_score(profile)
+
+        # Persist the overall influence score to DB
+        if result and "error" not in result:
+            raw_score = result.get("overall_influence_score")
+            if raw_score is not None:
+                try:
+                    # Normalise to 0.0-1.0 range (API returns 0-100)
+                    person.influence_score = round(float(raw_score) / 100.0, 4)
+                    await session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to cache influence score for person {person_id}: {e}")
+
         return result
 
 

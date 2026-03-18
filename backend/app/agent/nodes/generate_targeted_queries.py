@@ -75,7 +75,10 @@ def _build_targeted_queries(
     quoted_name = f'"{name}"'
     queries: list[dict] = []
 
-    platform_signals = {"github", "twitter", "scholar", "stackoverflow", "crunchbase", "medium", "reddit"}
+    platform_signals = {
+        "github", "twitter", "scholar", "stackoverflow", "crunchbase",
+        "medium", "reddit", "wikipedia", "hackernews", "instagram", "youtube",
+    }
 
     for signal in signals:
         sig_lower = signal.lower().strip()
@@ -97,6 +100,14 @@ def _build_targeted_queries(
                 q = {"query": name, "search_type": "medium", "rationale": f"targeted: Medium for {name}"}
             elif sig_lower == "reddit":
                 q = {"query": name, "search_type": "reddit", "rationale": f"targeted: Reddit for {name}"}
+            elif sig_lower == "wikipedia":
+                q = {"query": name, "search_type": "wikipedia", "rationale": f"targeted: Wikipedia for {name}"}
+            elif sig_lower == "hackernews":
+                q = {"query": name, "search_type": "hackernews", "rationale": f"targeted: HN for {name}"}
+            elif sig_lower == "instagram":
+                q = {"query": name, "search_type": "instagram", "rationale": f"targeted: Instagram for {name}"}
+            elif sig_lower == "youtube":
+                q = {"query": f"{name} talk interview keynote", "search_type": "youtube", "rationale": f"targeted: YouTube for {name}"}
             else:
                 continue
 
@@ -172,6 +183,26 @@ async def _run_query(query_str: str, search_type: str) -> list[dict]:
         elif search_type == "twitter":
             from app.tools.twitter_scraper import search_twitter_by_name
             results = await asyncio.wait_for(search_twitter_by_name(query_str), timeout=SEARCH_TIMEOUT)
+            return results or []
+
+        elif search_type == "wikipedia":
+            from app.tools.wikipedia_search import search_wikipedia
+            results = await asyncio.wait_for(search_wikipedia(query_str), timeout=SEARCH_TIMEOUT)
+            return [r.model_dump() if hasattr(r, "model_dump") else r for r in results or []]
+
+        elif search_type == "hackernews":
+            from app.tools.hackernews_search import search_hackernews
+            results = await asyncio.wait_for(search_hackernews(query_str), timeout=SEARCH_TIMEOUT)
+            return [r.model_dump() if hasattr(r, "model_dump") else r for r in results or []]
+
+        elif search_type == "instagram":
+            from app.tools.instagram_scraper import scrape_instagram_profile
+            results = await asyncio.wait_for(scrape_instagram_profile(query_str), timeout=SEARCH_TIMEOUT)
+            return [r.model_dump() if hasattr(r, "model_dump") else r for r in results or []]
+
+        elif search_type == "youtube":
+            from app.tools.youtube_transcript import search_and_transcribe
+            results = await asyncio.wait_for(search_and_transcribe(query_str), timeout=SEARCH_TIMEOUT)
             return results or []
 
         else:

@@ -143,6 +143,9 @@ async def filter_by_identity(state: AgentState) -> dict[str, Any]:
 
     return {
         "filtered_results": passed,
-        "search_results": passed,   # overwrite so downstream nodes see clean data
+        # Do NOT overwrite search_results — preserve originals so downstream nodes
+        # (synthesizer, verify_profile) can reference context that failed the strict
+        # anchor gate. Only filtered_results is used for analysis; search_results
+        # is the full provenance record.
         "status": "filter_complete",
     }

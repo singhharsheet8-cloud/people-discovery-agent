@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
+import { SearchProgress } from "@/components/search-progress";
 import {
   Edit,
   RefreshCw,
@@ -66,6 +67,10 @@ export default function PersonDetailPage() {
   const [sourceTab, setSourceTab] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [reSearching, setReSearching] = useState(false);
+  const [reSearchStep, setReSearchStep] = useState<string | null>(null);
+  const [reSearchElapsed, setReSearchElapsed] = useState(0);
+  const reSearchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reSearchStartRef = useRef<number>(0);
   const [exporting, setExporting] = useState<string | null>(null);
   const [activeIntel, setActiveIntel] = useState<string | null>(null);
   const [intelLoading, setIntelLoading] = useState(false);
@@ -146,13 +151,22 @@ export default function PersonDetailPage() {
 
   const handleReSearch = async () => {
     setReSearching(true);
+    setReSearchStep(null);
+    setReSearchElapsed(0);
+    reSearchStartRef.current = Date.now();
+    if (reSearchTimerRef.current) clearInterval(reSearchTimerRef.current);
+    reSearchTimerRef.current = setInterval(() => {
+      setReSearchElapsed(Math.floor((Date.now() - reSearchStartRef.current) / 1000));
+    }, 1000);
+
     try {
       const res = await reSearchPerson(id);
-      const pollInterval = 3000;
-      const maxPolls = 60;
+      const pollInterval = 2000;
+      const maxPolls = 90;
       for (let i = 0; i < maxPolls; i++) {
         await new Promise((r) => setTimeout(r, pollInterval));
         const job = await getJob(res.job_id);
+        if (job.current_step) setReSearchStep(job.current_step);
         if (job.status === "completed" || job.status === "failed") break;
       }
       const updated = await getPerson(id);
@@ -163,8 +177,12 @@ export default function PersonDetailPage() {
       // ignore
     } finally {
       setReSearching(false);
+      setReSearchStep(null);
+      if (reSearchTimerRef.current) clearInterval(reSearchTimerRef.current);
     }
   };
+
+  useEffect(() => () => { if (reSearchTimerRef.current) clearInterval(reSearchTimerRef.current); }, []);
 
   if (loading || !person) {
     return (
@@ -339,6 +357,15 @@ export default function PersonDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Re-search live progress */}
+      {reSearching && (
+        <SearchProgress
+          currentStep={reSearchStep}
+          isActive={reSearching}
+          elapsedSec={reSearchElapsed}
+        />
+      )}
 
       {/* Career Timeline */}
       {Array.isArray(person.career_timeline) && person.career_timeline.length > 0 && (

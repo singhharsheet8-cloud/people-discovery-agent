@@ -94,11 +94,14 @@ class Person(Base):
     skills: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of skill strings
     projects: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of project dicts
     recommendations: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of recommendation dicts
+    languages: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of spoken language strings
     followers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     blog_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
     reputation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    influence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sentiment_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: cached sentiment analysis result
     # 1536-dim vector from text-embedding-3-small; null until first embedding run
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="discovered")
@@ -114,7 +117,7 @@ class Person(Base):
             self.name_key = compute_name_key(self.name)
 
     _json_fields = ("education", "key_facts", "social_links", "expertise", "notable_work", "career_timeline",
-                    "skills", "projects", "recommendations")
+                    "skills", "projects", "recommendations", "languages", "sentiment_data")
 
     def set_json(self, field: str, value: Any) -> None:
         if field not in self._json_fields:
@@ -195,6 +198,7 @@ class DiscoveryJob(Base):
     person_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("persons.id"), nullable=True, index=True)
     input_params: Mapped[str] = mapped_column(Text)  # JSON
     status: Mapped[str] = mapped_column(String(50), default="queued", index=True)
+    current_step: Mapped[str | None] = mapped_column(String(100), nullable=True)  # live pipeline step
     cost_breakdown: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     total_cost: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)

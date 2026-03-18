@@ -101,6 +101,67 @@ def _extract_from_content(filtered_results: list[dict]) -> list[str]:
     return list(candidates)
 
 
+_THIN_CONTENT_THRESHOLD = 300  # characters — below this we consider a result "thin"
+
+_RETRY_PLATFORMS = frozenset({
+    "linkedin_profile", "linkedin_experience",
+    "youtube_transcript", "youtube",
+    "instagram",
+    "wikipedia",
+    "hackernews",
+})
+
+
+def _detect_thin_platforms(filtered_results: list[dict]) -> list[str]:
+    """
+    Identify platform source types that returned results but with very thin content.
+    Also identify platforms that have no results at all among the filtered set.
+
+    Returns platform signal strings that generate_targeted_queries knows how to handle.
+    Mapped to the platform signals it already understands:
+      linkedin_profile → "linkedin" signal (won't be retried by default — expensive)
+      youtube / youtube_transcript → "youtube" signal
+      wikipedia → "wikipedia" signal
+      hackernews → "hackernews" signal
+      instagram → "instagram" signal (thin by design — include if we got nothing)
+    """
+    covered_types: set[str] = set()
+    thin_types: set[str] = set()
+
+    for r in filtered_results:
+        if r.get("disambiguation_label") == "WRONG_PERSON":
+            continue
+        stype = r.get("source_type", "")
+        if stype not in _RETRY_PLATFORMS:
+            continue
+        covered_types.add(stype)
+        content = r.get("content", "") or ""
+        if len(content) < _THIN_CONTENT_THRESHOLD:
+            thin_types.add(stype)
+
+    # Map internal source_types to signal names generate_targeted_queries understands
+    _PLATFORM_SIGNAL_MAP = {
+        "youtube_transcript": "youtube",
+        "youtube": "youtube",
+        "wikipedia": "wikipedia",
+        "hackernews": "hackernews",
+        "instagram": "instagram",
+    }
+
+    signals: list[str] = []
+    for stype in thin_types:
+        sig = _PLATFORM_SIGNAL_MAP.get(stype)
+        if sig and sig not in signals:
+            signals.append(sig)
+
+    # Also add platforms that were entirely absent (not even thin results)
+    for platform, sig in _PLATFORM_SIGNAL_MAP.items():
+        if platform not in covered_types and sig not in signals:
+            signals.append(sig)
+
+    return signals
+
+
 def _missing_info_signals(analyzed_results: dict) -> list[str]:
     """
     Pull actionable signals from the analyzer's `missing_info` list.
@@ -177,6 +238,9 @@ async def iterative_enrich(state: AgentState) -> dict[str, Any]:
     # Source 3: Content-text heuristic extraction (fallback)
     content_companies = _extract_from_content(filtered_results) if not linkedin_companies else []
 
+    # Source 4: Platforms that returned thin or no results — retry them
+    thin_platform_signals = _detect_thin_platforms(filtered_results)
+
     # Build a set of plain executed query text for overlap detection
     executed_plain: set[str] = set()
     for q in state.get("search_queries", []):
@@ -184,7 +248,7 @@ async def iterative_enrich(state: AgentState) -> dict[str, Any]:
             executed_plain.add((q.get("query") or "").lower().strip())
 
     # Combine all signals, deduplicated
-    all_candidates = linkedin_companies + missing_signals + content_companies
+    all_candidates = linkedin_companies + missing_signals + content_companies + thin_platform_signals
     seen_candidates: set[str] = set()
     new_signals: list[str] = []
     for candidate in all_candidates:

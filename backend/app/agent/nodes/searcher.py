@@ -7,6 +7,7 @@ from app.tools.crunchbase_search import search_crunchbase
 from app.tools.firecrawl_extract import batch_extract, _is_blocked_domain
 from app.tools.github_search import search_github_users
 from app.tools.google_news_search import search_google_news
+from app.tools.hackernews_search import search_hackernews
 from app.tools.instagram_scraper import scrape_instagram_profile
 from app.tools.linkedin_scraper import (
     scrape_linkedin_experience,
@@ -21,6 +22,7 @@ from app.tools.scholar_search import search_scholar
 from app.tools.stackoverflow_search import search_stackoverflow
 from app.tools.tavily_search import search_tavily
 from app.tools.twitter_scraper import scrape_twitter_profile, search_twitter_by_name
+from app.tools.wikipedia_search import search_wikipedia
 from app.tools.youtube_transcript import search_and_transcribe
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,8 @@ GAP_FILL_PLATFORMS = [
     "crunchbase_dedicated",
     "patents",
     "stackoverflow",
+    "wikipedia",
+    "hackernews",
 ]
 
 
@@ -103,6 +107,12 @@ def _build_gap_fill_queries(
         elif platform == "stackoverflow":
             extra.append({"query": name, "search_type": "stackoverflow",
                           "rationale": "gap-fill: Stack Overflow activity"})
+        elif platform == "wikipedia":
+            extra.append({"query": name, "search_type": "wikipedia",
+                          "rationale": "gap-fill: Wikipedia biographical page"})
+        elif platform == "hackernews":
+            extra.append({"query": name, "search_type": "hackernews",
+                          "rationale": "gap-fill: Hacker News profile and submissions"})
 
     if "twitter" not in covered:
         handle = input_data.get("twitter_handle", "")
@@ -201,6 +211,16 @@ async def execute_searches(state: AgentState) -> dict:
             tasks.append(_with_timeout(_run_patents(query_str)))
         elif search_type == "stackoverflow":
             tasks.append(_with_timeout(_run_stackoverflow(query_str)))
+        elif search_type == "wikipedia":
+            tasks.append(_with_timeout(_run_wikipedia(
+                query_str,
+                company=input_data.get("company", ""),
+            )))
+        elif search_type == "hackernews":
+            tasks.append(_with_timeout(_run_hackernews(
+                query_str,
+                company=input_data.get("company", ""),
+            )))
 
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -223,7 +243,7 @@ async def execute_searches(state: AgentState) -> dict:
                 seen_keys.add(dedup_key)
                 seen_urls.add(url)
                 all_results.append(result_dict)
-                if source_type in ("web", "news") and url:
+                if source_type in ("web", "news", "google_news") and url:
                     urls_for_firecrawl.append(url)
 
     if urls_for_firecrawl:
@@ -513,3 +533,11 @@ async def _run_patents(name: str):
 
 async def _run_stackoverflow(name: str):
     return await search_stackoverflow(name)
+
+
+async def _run_wikipedia(name: str, company: str = ""):
+    return await search_wikipedia(name, company=company)
+
+
+async def _run_hackernews(name: str, company: str = ""):
+    return await search_hackernews(name, company=company)

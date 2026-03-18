@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import {
   Search,
@@ -11,15 +11,17 @@ import {
   Github,
   Twitter,
   FileText,
-  Loader2,
   CheckCircle,
   ExternalLink,
   Zap,
+  Instagram,
+  Loader2,
 } from "lucide-react";
 import { discoverPerson, getJob } from "@/lib/api";
 import type { DiscoverRequest, PersonProfile } from "@/lib/types";
 import { ApiDocsPanel } from "@/components/api-docs-panel";
 import { PersonProfile as PersonProfileComponent } from "@/components/person-profile";
+import { SearchProgress } from "@/components/search-progress";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -39,8 +41,12 @@ export default function Home() {
   const [form, setForm] = useState<DiscoverRequest>(initialForm);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [profile, setProfile] = useState<PersonProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const elapsedRef = useRef<NodeJS.Timeout | null>(null);
 
   const updateField = useCallback(
     (field: keyof DiscoverRequest, value: string) => {
@@ -53,16 +59,21 @@ export default function Home() {
   const pollJob = useCallback(async (id: string) => {
     try {
       const job = await getJob(id);
+      if (job.current_step) setCurrentStep(job.current_step);
       if (job.status === "completed" && job.profile) {
         setProfile(job.profile);
         setJobId(null);
         setIsDiscovering(false);
+        setCurrentStep(null);
+        if (elapsedRef.current) clearInterval(elapsedRef.current);
         return;
       }
-      if (job.status === "failed" && job.error_message) {
-        setError(job.error_message);
+      if (job.status === "failed") {
+        setError(job.error_message || "Discovery failed");
         setJobId(null);
         setIsDiscovering(false);
+        setCurrentStep(null);
+        if (elapsedRef.current) clearInterval(elapsedRef.current);
         return;
       }
     } catch (err) {
@@ -77,18 +88,26 @@ export default function Home() {
     }
     setError(null);
     setProfile(null);
+    setCurrentStep(null);
+    setElapsedSec(0);
     setIsDiscovering(true);
+    startTimeRef.current = Date.now();
+
+    // Tick elapsed seconds
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    elapsedRef.current = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+
     try {
       const res = await discoverPerson(form);
       setJobId(res.job_id);
-      if (res.job_id) {
-        pollJob(res.job_id);
-      } else {
-        setIsDiscovering(false);
-      }
+      if (res.job_id) pollJob(res.job_id);
+      else setIsDiscovering(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Discovery failed");
       setIsDiscovering(false);
+      if (elapsedRef.current) clearInterval(elapsedRef.current);
     }
   }, [form, pollJob]);
 
@@ -97,6 +116,8 @@ export default function Home() {
     const interval = setInterval(() => pollJob(jobId), POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [jobId, isDiscovering, pollJob]);
+
+  useEffect(() => () => { if (elapsedRef.current) clearInterval(elapsedRef.current); }, []);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-gray-100">
@@ -280,7 +301,7 @@ export default function Home() {
                       Instagram Handle
                     </label>
                     <div className="relative">
-                      <User
+                      <Instagram
                         size={16}
                         className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
                       />
@@ -347,17 +368,11 @@ export default function Home() {
           {/* Result Panel */}
           <div className="space-y-6">
             {isDiscovering && (
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 flex flex-col items-center justify-center gap-4">
-                <div className="w-16 h-16 rounded-2xl bg-brand-500/20 flex items-center justify-center">
-                  <Loader2 size={32} className="text-brand-400 animate-spin" />
-                </div>
-                <div className="text-center">
-                  <p className="text-white font-medium">Discovering person...</p>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Polling job status every {POLL_INTERVAL_MS / 1000}s
-                  </p>
-                </div>
-              </div>
+              <SearchProgress
+                currentStep={currentStep}
+                isActive={isDiscovering}
+                elapsedSec={elapsedSec}
+              />
             )}
 
             {profile && !isDiscovering && (

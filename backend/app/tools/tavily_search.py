@@ -47,18 +47,21 @@ SEARCH_TYPE_CONFIG = {
     "youtube": {
         "include_domains": ["youtube.com"],
         "search_depth": "basic",
+        # YouTube pages don't have meaningful raw article content; transcripts
+        # are fetched separately via youtube_transcript.py
         "include_raw_content": False,
         "topic": "general",
     },
     "github": {
         "include_domains": ["github.com"],
-        "search_depth": "basic",
-        "include_raw_content": False,
+        "search_depth": "advanced",
+        "include_raw_content": True,
         "topic": "general",
     },
     "twitter": {
         "include_domains": ["twitter.com", "x.com"],
         "search_depth": "basic",
+        # Twitter/X pages rarely expose full content to scrapers
         "include_raw_content": False,
         "topic": "general",
     },
@@ -70,20 +73,20 @@ SEARCH_TYPE_CONFIG = {
     },
     "academic": {
         "include_domains": ["scholar.google.com", "researchgate.net", "arxiv.org", "semanticscholar.org"],
-        "search_depth": "basic",
-        "include_raw_content": False,
+        "search_depth": "advanced",
+        "include_raw_content": True,
         "topic": "general",
     },
     "crunchbase": {
         "include_domains": ["crunchbase.com"],
-        "search_depth": "basic",
-        "include_raw_content": False,
+        "search_depth": "advanced",
+        "include_raw_content": True,
         "topic": "general",
     },
     "blog": {
         "include_domains": ["medium.com", "substack.com", "dev.to", "hashnode.dev"],
-        "search_depth": "basic",
-        "include_raw_content": False,
+        "search_depth": "advanced",
+        "include_raw_content": True,
         "topic": "general",
     },
     "web": {

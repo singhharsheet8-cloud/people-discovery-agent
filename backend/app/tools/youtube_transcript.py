@@ -201,5 +201,8 @@ async def search_and_transcribe(person_name: str, max_videos: int = 3) -> list[d
     if results:
         logger.info(f"[youtube] {len(results)} video(s) for '{person_name}' "
                     f"({sum(1 for r in results if r['structured']['has_transcript'])} with transcript)")
-        await set_cached_results(cache_key, "youtube_transcript", results)
-        return results
+    else:
+        logger.info(f"[youtube] no usable videos found for '{person_name}'")
+
+    await set_cached_results(cache_key, "youtube_transcript", results)
+    return results

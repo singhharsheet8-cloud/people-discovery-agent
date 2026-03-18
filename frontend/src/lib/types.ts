@@ -64,6 +64,7 @@ export interface JobSummary {
   id: string;
   person_id?: string;
   status: string;
+  current_step?: string;
   input_params?: Record<string, unknown>;
   cost_breakdown?: Record<string, unknown>;
   total_cost: number;

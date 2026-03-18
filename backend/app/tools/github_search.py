@@ -94,11 +94,22 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
                 bio_parts.append(f"Location: {profile['location']}")
             if profile.get("blog"):
                 bio_parts.append(f"Website: {profile['blog']}")
+            if profile.get("email"):
+                bio_parts.append(f"Email: {profile['email']}")
+            if profile.get("twitter_username"):
+                bio_parts.append(f"Twitter: @{profile['twitter_username']}")
+            if profile.get("hireable"):
+                bio_parts.append("Open to work: Yes")
             bio_parts.append(f"Public repos: {profile.get('public_repos', 0)}")
             bio_parts.append(f"Followers: {profile.get('followers', 0)}")
             bio_parts.append(f"Following: {profile.get('following', 0)}")
+            if profile.get("public_gists", 0):
+                bio_parts.append(f"Public gists: {profile['public_gists']}")
+            if profile.get("created_at"):
+                bio_parts.append(f"GitHub since: {profile['created_at'][:10]}")
 
             # Append top repos (by stars)
+            top_repos = []
             if repos:
                 top = sorted(repos, key=lambda r: r.get("stargazers_count", 0), reverse=True)[:5]
                 repo_strs = []
@@ -107,7 +118,15 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
                     lang = repo.get("language") or ""
                     desc = (repo.get("description") or "")[:80]
                     r_name = repo.get("name", "")
+                    repo_url = repo.get("html_url", "")
                     repo_strs.append(f"{r_name} ({lang}, ⭐{stars}): {desc}")
+                    top_repos.append({
+                        "name": r_name,
+                        "url": repo_url,
+                        "stars": stars,
+                        "language": lang,
+                        "description": desc,
+                    })
                 bio_parts.append("Top repos: " + "; ".join(repo_strs))
 
             results.append(
@@ -123,8 +142,16 @@ async def search_github_users(query: str, max_results: int = 3) -> list[SearchRe
                         "bio": profile.get("bio", ""),
                         "company": profile.get("company", ""),
                         "location": profile.get("location", ""),
+                        "blog": profile.get("blog", ""),
+                        "email": profile.get("email", ""),
+                        "twitter_username": profile.get("twitter_username", ""),
+                        "hireable": profile.get("hireable"),
                         "followers": profile.get("followers", 0),
+                        "following": profile.get("following", 0),
                         "public_repos": profile.get("public_repos", 0),
+                        "public_gists": profile.get("public_gists", 0),
+                        "created_at": profile.get("created_at", ""),
+                        "top_repos": top_repos,
                     },
                 )
             )
