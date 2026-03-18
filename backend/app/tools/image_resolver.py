@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v9"  # bumped: name-match identity gate on all tiers
+_CACHE_TOOL = "image_resolver_v10"  # bumped: block event-site banners (explara etc.)
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -434,6 +434,15 @@ def _extract_portrait_page_urls(
         "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
         "nubela.co", "clay.com", "hunter.io", "clearbit.com",
         "signalhire.com", "contactout.com", "lusha.com",
+        # Event/conference platforms — og:image is always a banner, not a headshot
+        "explara.com", "eventbrite.com", "meetup.com", "konfhub.com",
+        "townscript.com", "allevents.in", "luma.com", "lu.ma",
+        "tickettailor.com", "eventzilla.net", "airmeet.com", "hopin.com",
+        # Job posting sites — headshots not present
+        "naukri.com", "shine.com", "indeed.com", "glassdoor.com",
+        "timesjobs.com", "monster.com", "foundit.in",
+        # Generic aggregators/directories that show wrong-person headshots
+        "justdial.com", "sulekha.com", "tradeindia.com", "indiamart.com",
     })
 
     _CONTENT_PATH_SIGNALS = (
