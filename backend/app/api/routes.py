@@ -2219,3 +2219,45 @@ async def get_person_summary(
     }
 
 
+# ── Staleness / Auto-Refresh ─────────────────────────────────────────────────
+
+@router.get("/admin/staleness")
+async def get_staleness_status(_auth=Depends(require_admin)):
+    """Return how many persons are stale and when they were last updated."""
+    from app.staleness import STALE_AFTER_DAYS, REFRESH_COOLDOWN_DAYS, BATCH_SIZE, CRON_INTERVAL_SECS
+    from datetime import timedelta
+
+    factory = get_session_factory()
+    async with factory() as session:
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_AFTER_DAYS)
+        total_q = select(func.count()).select_from(Person)
+        stale_q = select(func.count()).select_from(Person).where(Person.updated_at < stale_cutoff)
+        total = (await session.execute(total_q)).scalar() or 0
+        stale = (await session.execute(stale_q)).scalar() or 0
+
+        oldest = (await session.execute(
+            select(Person.name, Person.updated_at).order_by(Person.updated_at.asc()).limit(5)
+        )).all()
+
+    return {
+        "total_persons": total,
+        "stale_count": stale,
+        "stale_after_days": STALE_AFTER_DAYS,
+        "refresh_cooldown_days": REFRESH_COOLDOWN_DAYS,
+        "batch_size": BATCH_SIZE,
+        "cron_interval_seconds": CRON_INTERVAL_SECS,
+        "oldest_profiles": [
+            {"name": r.name, "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            for r in oldest
+        ],
+    }
+
+
+@router.post("/admin/staleness/trigger")
+async def trigger_staleness_refresh(_auth=Depends(require_admin)):
+    """Manually trigger one staleness cron tick (for testing / admin use)."""
+    from app.staleness import staleness_cron_tick
+    asyncio.create_task(staleness_cron_tick(), name="manual-stale-tick")
+    return {"message": "Staleness refresh tick queued"}
+
+

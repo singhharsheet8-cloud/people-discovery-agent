@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     from app.cache import cleanup_expired_cache
+    from app.staleness import run_staleness_cron
 
     await init_db()
 
@@ -98,8 +99,12 @@ async def lifespan(app: FastAPI):
                 pass
 
     cleanup_task = asyncio.create_task(_periodic_cache_cleanup())
+    staleness_task = asyncio.create_task(run_staleness_cron())
+
     yield
+
     cleanup_task.cancel()
+    staleness_task.cancel()
     await close_db()
     from app.redis_client import close_redis
 

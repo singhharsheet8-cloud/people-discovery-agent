@@ -373,3 +373,21 @@ export async function getPersonsFiltered(params: {
   if (params.sort_order) p.set("sort_order", params.sort_order);
   return fetchApi<{ items: PersonSummary[]; total: number; page: number; per_page: number }>(`/persons?${p}`);
 }
+
+// ── Staleness / Auto-Refresh ─────────────────────────────────────────────────
+
+export function getStalenessStatus() {
+  return fetchApi<{
+    total_persons: number;
+    stale_count: number;
+    stale_after_days: number;
+    refresh_cooldown_days: number;
+    batch_size: number;
+    cron_interval_seconds: number;
+    oldest_profiles: Array<{ name: string; updated_at: string | null }>;
+  }>("/admin/staleness");
+}
+
+export function triggerStalenessRefresh() {
+  return fetchApi<{ message: string }>("/admin/staleness/trigger", { method: "POST" });
+}

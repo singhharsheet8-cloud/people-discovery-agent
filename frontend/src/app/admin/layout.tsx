@@ -20,6 +20,7 @@ import {
   BarChart3,
   Shield,
   Network,
+  Clock,
 } from "lucide-react";
 
 export default function AdminLayout({
@@ -66,6 +67,7 @@ export default function AdminLayout({
     { href: "/admin/api-keys", label: "API Keys", icon: Key },
     { href: "/admin/webhooks", label: "Webhooks", icon: Webhook },
     { href: "/admin/batch", label: "Batch Discovery", icon: Upload },
+    { href: "/admin/staleness", label: "Auto-Refresh", icon: Clock },
     { href: "/admin/compare", label: "Compare", icon: GitCompare },
     { href: "/admin/network", label: "Network Graph", icon: Network },
     { href: "/admin/docs", label: "API Docs", icon: Book },
