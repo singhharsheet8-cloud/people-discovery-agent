@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v10"  # bumped: block event-site banners (explara etc.)
+_CACHE_TOOL = "image_resolver_v11"  # tighten landscape gate, allow name-in-URL wider
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -91,7 +91,7 @@ _LICDN_REJECT_PATHS = (
 
 # Aspect ratio bounds — outside this range → not a headshot
 _MIN_ASPECT = 0.45   # very tall portrait is fine
-_MAX_ASPECT = 1.65   # 1800x1200 landscape would be 1.5 → reject at 1.65
+_MAX_ASPECT = 1.3    # tightened: 1280x854 = 1.5 rejects conference/group shots
 _MIN_DIMENSION = 100  # pixels — ignore tiny thumbnails
 
 
@@ -246,7 +246,9 @@ async def _upload_to_storage(url: str, name: str) -> str | None:
 # Quality validation
 # ---------------------------------------------------------------------------
 
-async def _validate_image(url: str, timeout: float = 5.0) -> tuple[bool, str]:
+async def _validate_image(
+    url: str, timeout: float = 5.0, target_name: str | None = None
+) -> tuple[bool, str]:
     """
     Return (True, "ok") if the URL points to a headshot-quality image, else
     (False, reason).
@@ -308,7 +310,15 @@ async def _validate_image(url: str, timeout: float = 5.0) -> tuple[bool, str]:
                 return False, f"too small: {w}x{h}"
 
             aspect = w / h
-            if aspect < _MIN_ASPECT or aspect > _MAX_ASPECT:
+            # If person's name tokens appear in the image URL, allow moderately wider
+            # images (e.g. YourStory interview banners like Prashant-Parashar-*.png)
+            name_in_url = False
+            if target_name:
+                name_tokens = [t.lower() for t in target_name.split() if len(t) > 2]
+                url_lower = url.lower()
+                name_in_url = sum(1 for t in name_tokens if t in url_lower) >= len(name_tokens)
+            effective_max = (_MAX_ASPECT * 1.7) if name_in_url else _MAX_ASPECT
+            if aspect < _MIN_ASPECT or aspect > effective_max:
                 return False, f"bad aspect ratio {aspect:.2f} ({w}x{h})"
 
             return True, "ok"
