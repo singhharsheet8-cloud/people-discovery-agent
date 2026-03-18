@@ -1201,12 +1201,18 @@ async def refresh_person_image(person_id: str, _admin=Depends(require_admin)):
         await session.commit()
 
     # Run resolver outside the session
-    from app.cache import set_cached_results  # noqa: PLC0415
-    # Invalidate the old cache entry for this person
-    old_cache_key = f"{name}|{company or ''}"
-    for tool_name in ("image_resolver_v3", "image_resolver_v4"):
+    # Wipe ALL image resolver cache entries for this person (any version)
+    # so the resolver always fetches fresh when called from this endpoint.
+    from app.db import get_session_factory as _gsf  # noqa: PLC0415
+    _factory2 = _gsf()
+    async with _factory2() as _sess:
         try:
-            await set_cached_results(old_cache_key, tool_name, [])
+            from sqlalchemy import text as _text
+            await _sess.execute(
+                _text("DELETE FROM search_cache WHERE cache_key LIKE :key AND source_tool LIKE 'image_resolver%'"),
+                {"key": f"%{name}%"},
+            )
+            await _sess.commit()
         except Exception:
             pass
 
