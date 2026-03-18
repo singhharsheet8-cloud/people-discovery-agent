@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v12"  # min 200px, block SO/Quora, tighter landscape
+_CACHE_TOOL = "image_resolver_v13"  # target_name threaded to _validate_image; social_links injected
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -611,7 +611,7 @@ async def _scan_portrait_pages(urls: list[str], name: str) -> str | None:
 
     targets = urls[:10]
     results = await asyncio.gather(
-        *[_personal_website_og_image(u) for u in targets],
+        *[_personal_website_og_image(u, target_name=name) for u in targets],
         return_exceptions=True,
     )
 
@@ -626,7 +626,7 @@ async def _scan_portrait_pages(urls: list[str], name: str) -> str | None:
     return None
 
 
-async def _personal_website_og_image(website_url: str | None) -> str | None:
+async def _personal_website_og_image(website_url: str | None, target_name: str | None = None) -> str | None:
     """
     Scrape the person's personal website for a portrait-quality image.
     IDENTITY-SAFE: the site belongs to the person.
@@ -742,7 +742,7 @@ async def _personal_website_og_image(website_url: str | None) -> str | None:
 
         # Validate each candidate — aspect gate naturally filters landscape banners
         for url in all_candidates:
-            ok, reason = await _validate_image(url)
+            ok, reason = await _validate_image(url, target_name=target_name)
             if ok:
                 logger.info(f"[image] T1b-personal-website: {url[:90]} from {website_url}")
                 return url

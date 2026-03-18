@@ -1179,6 +1179,14 @@ async def refresh_person_image(person_id: str, _admin=Depends(require_admin)):
         name = person.name
         company = person.company
 
+        # Extract social_links from the persons table (linkedin, website, etc.)
+        social_links: dict = {}
+        if person.social_links:
+            try:
+                social_links = json.loads(person.social_links) if isinstance(person.social_links, str) else (person.social_links or {})
+            except Exception:
+                pass
+
         # Get existing sources to give the resolver context (LinkedIn handle etc.)
         sources_rows = (await session.execute(
             select(PersonSource).where(PersonSource.person_id == person_id)
@@ -1195,6 +1203,26 @@ async def refresh_person_image(person_id: str, _admin=Depends(require_admin)):
                 except Exception:
                     pass
             search_results.append(entry)
+
+        # Inject social_links as a high-priority synthetic source so the resolver
+        # can find the personal website og:image and LinkedIn profile photo.
+        if social_links:
+            website = social_links.get("website") or social_links.get("personal_site")
+            linkedin = social_links.get("linkedin")
+            if website:
+                search_results.insert(0, {
+                    "url": website,
+                    "source_type": "personal_website",
+                    "relevance_score": 1.0,
+                    "structured": {"social_links": social_links},
+                })
+            if linkedin:
+                search_results.insert(0, {
+                    "url": linkedin,
+                    "source_type": "linkedin_profile",
+                    "relevance_score": 1.0,
+                    "structured": {"social_links": social_links},
+                })
 
         # Clear old image so resolver doesn't hit the old (bad) cached value
         person.image_url = None
