@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v11"  # tighten landscape gate, allow name-in-URL wider
+_CACHE_TOOL = "image_resolver_v12"  # min 200px, block SO/Quora, tighter landscape
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -92,7 +92,7 @@ _LICDN_REJECT_PATHS = (
 # Aspect ratio bounds — outside this range → not a headshot
 _MIN_ASPECT = 0.45   # very tall portrait is fine
 _MAX_ASPECT = 1.3    # tightened: 1280x854 = 1.5 rejects conference/group shots
-_MIN_DIMENSION = 100  # pixels — ignore tiny thumbnails
+_MIN_DIMENSION = 200  # pixels — reject tiny icons/avatars (was 100)
 
 
 def _is_linkedin_profile_photo(url: str) -> bool:
@@ -451,6 +451,8 @@ def _extract_portrait_page_urls(
         # Job posting sites — headshots not present
         "naukri.com", "shine.com", "indeed.com", "glassdoor.com",
         "timesjobs.com", "monster.com", "foundit.in",
+        # Q&A / tech sites — only tiny avatars, not headshots
+        "stackoverflow.com", "stackexchange.com", "quora.com",
         # Generic aggregators/directories that show wrong-person headshots
         "justdial.com", "sulekha.com", "tradeindia.com", "indiamart.com",
     })
