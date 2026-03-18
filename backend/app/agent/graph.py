@@ -79,7 +79,6 @@ from app.agent.nodes.analyzer import analyze_results
 from app.agent.nodes.enricher import enrich_data
 from app.agent.nodes.iterative_enrich import iterative_enrich
 from app.agent.nodes.generate_targeted_queries import generate_targeted_queries
-from app.agent.nodes.sentiment import analyze_sentiment
 from app.agent.nodes.synthesizer import synthesize_profile
 from app.agent.nodes.verify_profile import verify_profile
 
@@ -153,7 +152,8 @@ def build_graph() -> StateGraph:
     builder.add_node("generate_targeted_queries", generate_targeted_queries)
 
     # ── Synthesis + Verification ──
-    builder.add_node("analyze_sentiment", analyze_sentiment)
+    # Note: sentiment analysis now runs concurrently INSIDE synthesize_profile
+    # (see synthesizer.py _run_sentiment_inline), so no separate node is needed.
     builder.add_node("synthesize_profile", synthesize_profile)
     builder.add_node("verify_profile", verify_profile)
 
@@ -190,7 +190,7 @@ def build_graph() -> StateGraph:
         _route_enrichment_loop,
         {
             "refine": "generate_targeted_queries",
-            "done": "analyze_sentiment",
+            "done": "synthesize_profile",
         },
     )
 
@@ -200,8 +200,7 @@ def build_graph() -> StateGraph:
     #    before iterative_enrich makes its next decision.
     builder.add_edge("generate_targeted_queries", "filter_results")
 
-    # 8. Synthesis → verification → end
-    builder.add_edge("analyze_sentiment", "synthesize_profile")
+    # 8. Synthesis (includes inline sentiment) → verification → end
     builder.add_edge("synthesize_profile", "verify_profile")
     builder.add_edge("verify_profile", END)
 

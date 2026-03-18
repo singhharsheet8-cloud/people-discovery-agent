@@ -408,8 +408,7 @@ async def _run_discovery(job_id: str, input_data: dict):
             "enrich_data":              "enriching",
             "iterative_enrich":         "iterating",
             "generate_targeted_queries":"refining",
-            "analyze_sentiment":        "scoring_sentiment",
-            "synthesize_profile":       "synthesizing",
+            "synthesize_profile":       "synthesizing",   # sentiment runs concurrently inside this node
             "verify_profile":           "verifying",
         }
         result = None

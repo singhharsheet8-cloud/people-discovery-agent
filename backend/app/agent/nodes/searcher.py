@@ -26,7 +26,9 @@ from app.tools.wikipedia_search import search_wikipedia
 from app.tools.youtube_transcript import search_and_transcribe
 
 logger = logging.getLogger(__name__)
-SEARCH_TIMEOUT = 45
+SEARCH_TIMEOUT = 25   # tightened: slow sources timeout fast, gather handles the rest
+_FIRECRAWL_TIMEOUT = 55  # Firecrawl batch is slower by design
+_LINKEDIN_EXP_TIMEOUT = 40
 
 GAP_FILL_PLATFORMS = [
     "youtube",
@@ -246,168 +248,176 @@ async def execute_searches(state: AgentState) -> dict:
                 if source_type in ("web", "news", "google_news") and url:
                     urls_for_firecrawl.append(url)
 
-    if urls_for_firecrawl:
+    # ── Phase 2: Parallel deep enrichment ───────────────────────────────────
+    # Firecrawl, LinkedIn experience, and social discovery all run concurrently.
+    # This cuts ~60-90s of sequential I/O down to the slowest single task (~55s).
+
+    import urllib.parse as _urlparse
+
+    _AGGREGATORS = frozenset({
+        "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
+        "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
+        "nubela.co", "clay.com", "hunter.io", "clearbit.com",
+        "signalhire.com", "contactout.com", "lusha.com",
+    })
+
+    def _url_tier(url: str) -> int:
+        """
+        Return a priority tier for Firecrawl scraping (lower = higher priority).
+
+        Tier 0 — Personal website / portfolio (identity-safe, richest source)
+        Tier 1 — Blog posts, podcast episodes, interviews, news articles
+        Tier 2 — Wikipedia, GitHub, company pages, Crunchbase
+        Tier 3 — Generic web (everything else)
+        Tier 99 — Skip (blocked social platforms or people-aggregators)
+        """
+        if _is_blocked_domain(url):
+            return 99
         try:
-            import urllib.parse as _urlparse
+            host = _urlparse.urlparse(url).hostname or ""
+            path = _urlparse.urlparse(url).path.lower()
+        except Exception:
+            return 3
 
-            # ── Domain classification ────────────────────────────────────────────
-            # People-aggregators: contain info about the person but are scraped
-            # already as structured sources; Firecrawl adds little value.
-            _AGGREGATORS = frozenset({
-                "getprog.ai", "weekday.works", "topline.com", "rocketreach.co",
-                "zoominfo.com", "apollo.io", "angellist.com", "wellfound.com",
-                "nubela.co", "clay.com", "hunter.io", "clearbit.com",
-                "signalhire.com", "contactout.com", "lusha.com",
-            })
+        if any(a in host for a in _AGGREGATORS):
+            return 99
 
-            def _url_tier(url: str) -> int:
-                """
-                Return a priority tier for Firecrawl scraping (lower = higher priority).
+        if host in ("en.wikipedia.org", "github.com", "crunchbase.com"):
+            return 2
 
-                Tier 0 — Personal website / portfolio (identity-safe, richest source)
-                Tier 1 — Blog posts, podcast episodes, interviews, news articles
-                Tier 2 — Wikipedia, GitHub, company pages, Crunchbase
-                Tier 3 — Generic web (everything else)
-                Tier 99 — Skip (blocked social platforms or people-aggregators)
-                """
-                if _is_blocked_domain(url):
-                    return 99
-                try:
-                    host = _urlparse.urlparse(url).hostname or ""
-                    path = _urlparse.urlparse(url).path.lower()
-                except Exception:
-                    return 3
+        _CONTENT_SIGNALS = (
+            "/episodes/", "/podcast/", "/blog/", "/post/", "/article/",
+            "/interview/", "/profile/", "/person/", "/speaker/",
+            "/about", "/bio", "/people/",
+        )
+        if any(sig in path for sig in _CONTENT_SIGNALS):
+            return 1
 
-                if any(a in host for a in _AGGREGATORS):
-                    return 99  # already covered by structured data; skip
+        parts = host.split(".")
+        if len(parts) <= 3 and not any(a in host for a in _AGGREGATORS):
+            return 0
 
-                # Known high-signal domains
-                if host in ("en.wikipedia.org", "github.com", "crunchbase.com"):
-                    return 2
+        return 3
 
-                # Podcast/blog/interview/news indicators in URL path
-                _CONTENT_SIGNALS = (
-                    "/episodes/", "/podcast/", "/blog/", "/post/", "/article/",
-                    "/interview/", "/profile/", "/person/", "/speaker/",
-                    "/about", "/bio", "/people/",
-                )
-                if any(sig in path for sig in _CONTENT_SIGNALS):
-                    return 1
-
-                # Short domain = likely personal site (e.g. vidyadhar.xyz, anujrathi.com)
-                parts = host.split(".")
-                if len(parts) <= 3 and not any(a in host for a in _AGGREGATORS):
-                    return 0
-
-                return 3
-
-            # ── Build prioritized scrape list ────────────────────────────────────
-            # Sort by tier, then preserve original rank order within each tier.
-            # Cap at 10 URLs — Firecrawl scrapes them in parallel so 10 ≈ same
-            # latency as 8 but gives much better recall.
+    # ── Build Firecrawl task ─────────────────────────────────────────────────
+    async def _run_firecrawl() -> list[dict]:
+        if not urls_for_firecrawl:
+            return []
+        try:
             scored = []
             for i, url in enumerate(urls_for_firecrawl):
                 tier = _url_tier(url)
                 if tier < 99:
                     scored.append((tier, i, url))
             scored.sort()
-
             prioritized = list(dict.fromkeys(url for _, _, url in scored))
-
             tier0 = [u for tier_val, _, u in scored if tier_val == 0]
             if tier0:
                 logger.info(f"[searcher] personal site(s) first: {tier0}")
-
             logger.info(
-                f"[searcher] Firecrawl scraping {min(len(prioritized),10)}/{len(urls_for_firecrawl)} URLs "
-                f"(tiers: {[t for t,_,_ in scored[:10]]})"
+                f"[searcher] Firecrawl scraping {min(len(prioritized), 10)}/{len(urls_for_firecrawl)} URLs "
+                f"(tiers: {[t for t, _, _ in scored[:10]]})"
             )
-
-            deep_results = await _with_timeout(batch_extract(prioritized[:10]), timeout=60)
-            if deep_results and not isinstance(deep_results, Exception):
-                for r in deep_results:
-                    r_dict = r if isinstance(r, dict) else r
-                    url = r_dict.get("url", "")
-                    # Tag personal/portfolio pages clearly
-                    if url and _url_tier(url) == 0:
-                        r_dict.setdefault("source_type", "personal_website")
-                    elif url and _url_tier(url) == 1:
-                        r_dict.setdefault("source_type", "web")
-                    # Dedup on canonical URL only — source_type can differ between
-                    # Tavily ("web") and Firecrawl ("firecrawl") for the same page
-                    canon_url = url.split("?")[0].rstrip("/")
-                    if url and canon_url not in seen_urls:
-                        seen_urls.add(canon_url)
-                        seen_keys.add((canon_url, r_dict.get("source_type", "firecrawl")))
-                        all_results.append(r_dict)
+            raw = await asyncio.wait_for(batch_extract(prioritized[:10]), timeout=_FIRECRAWL_TIMEOUT)
+            out = []
+            for r in (raw or []):
+                r_dict = r if isinstance(r, dict) else r
+                url = r_dict.get("url", "")
+                if url and _url_tier(url) == 0:
+                    r_dict.setdefault("source_type", "personal_website")
+                elif url and _url_tier(url) == 1:
+                    r_dict.setdefault("source_type", "web")
+                out.append(r_dict)
+            return out
         except Exception as e:
             logger.warning(f"Firecrawl batch extract failed: {e}")
+            return []
 
-    # Deep-scrape LinkedIn experience page for full career history
+    # ── Build LinkedIn experience task ───────────────────────────────────────
     linkedin_url = input_data.get("linkedin_url", "")
     if not linkedin_url:
-        # Try to discover LinkedIn URL from gathered results
         for r in all_results:
             url = r.get("url", "")
             if "linkedin.com/in/" in url and "/posts/" not in url and "/pulse/" not in url:
                 linkedin_url = url.split("?")[0].rstrip("/")
                 break
 
-    if linkedin_url and "linkedin.com/in/" in linkedin_url:
-        already_scraped_experience = any(
-            r.get("source_type") == "linkedin_experience" for r in all_results
-        )
-        if not already_scraped_experience:
-            try:
-                exp_results = await _with_timeout(scrape_linkedin_experience(linkedin_url), timeout=45)
-                if exp_results and not isinstance(exp_results, Exception):
-                    for r in exp_results:
-                        url = r.get("url", "")
-                        st = r.get("source_type", "linkedin_experience")
-                        dk = (url.split("?")[0].rstrip("/"), st)
-                        if url and dk not in seen_keys:
-                            seen_keys.add(dk)
-                            seen_urls.add(url)
-                            all_results.append(r)
-                    logger.info(f"LinkedIn experience scraped: {len(exp_results)} result(s)")
-            except Exception as e:
-                logger.warning(f"LinkedIn experience scrape step failed: {e}")
+    already_scraped_experience = any(
+        r.get("source_type") == "linkedin_experience" for r in all_results
+    )
 
-    # Auto-discover and scrape Twitter/Instagram handles from gathered results
+    async def _run_linkedin_exp() -> list[dict]:
+        if not linkedin_url or "linkedin.com/in/" not in linkedin_url or already_scraped_experience:
+            return []
+        try:
+            results = await asyncio.wait_for(
+                scrape_linkedin_experience(linkedin_url), timeout=_LINKEDIN_EXP_TIMEOUT
+            )
+            logger.info(f"LinkedIn experience scraped: {len(results or [])} result(s)")
+            return results or []
+        except Exception as e:
+            logger.warning(f"LinkedIn experience scrape failed: {e}")
+            return []
+
+    # ── Build social discovery task ──────────────────────────────────────────
     got_twitter = any(
         r.get("source_type") == "twitter" or "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
         for r in all_results
     )
     got_instagram = any(r.get("source_type") == "instagram" for r in all_results)
 
-    if not got_twitter or not got_instagram:
+    async def _run_social_discovery() -> list[dict]:
+        if got_twitter and got_instagram:
+            return []
         discovered = _extract_social_handles(all_results, seen_urls)
-        social_tasks = []
+        social_tasks_inner = []
+        labels = []
         if not got_twitter and discovered.get("twitter"):
             logger.info(f"Auto-discovered Twitter handle: @{discovered['twitter']}")
-            social_tasks.append(("twitter", _with_timeout(_run_twitter(discovered["twitter"]))))
+            social_tasks_inner.append(_run_twitter(discovered["twitter"]))
+            labels.append("twitter")
         if not got_instagram and discovered.get("instagram"):
             logger.info(f"Auto-discovered Instagram handle: @{discovered['instagram']}")
-            social_tasks.append(("instagram", _with_timeout(_run_instagram(discovered["instagram"]))))
+            social_tasks_inner.append(_run_instagram(discovered["instagram"]))
+            labels.append("instagram")
+        if not social_tasks_inner:
+            return []
+        results_inner = await asyncio.gather(*social_tasks_inner, return_exceptions=True)
+        out = []
+        for platform, result_list in zip(labels, results_inner):
+            if isinstance(result_list, (Exception, type(None))):
+                if isinstance(result_list, Exception):
+                    logger.warning(f"Auto-discovered {platform} scrape failed: {result_list}")
+                continue
+            for result in result_list or []:
+                r_dict = result.model_dump() if hasattr(result, "model_dump") else result
+                out.append(r_dict)
+        return out
 
-        if social_tasks:
-            social_results = await asyncio.gather(
-                *[t[1] for t in social_tasks], return_exceptions=True
-            )
-            for (platform, _), result_list in zip(social_tasks, social_results):
-                if isinstance(result_list, (Exception, type(None))):
-                    if isinstance(result_list, Exception):
-                        logger.warning(f"Auto-discovered {platform} scrape failed: {result_list}")
-                    continue
-                for result in result_list or []:
-                    r_dict = result.model_dump() if hasattr(result, "model_dump") else result
-                    url = r_dict.get("url", "")
-                    st = r_dict.get("source_type", "")
-                    dk = (url.split("?")[0].rstrip("/"), st)
-                    if url and dk not in seen_keys:
-                        seen_keys.add(dk)
-                        seen_urls.add(url)
-                        all_results.append(r_dict)
+    # ── Run all three concurrently ───────────────────────────────────────────
+    logger.info("[searcher] Starting parallel deep-enrichment (Firecrawl + LinkedIn exp + social)")
+    firecrawl_results, linkedin_exp_results, social_results = await asyncio.gather(
+        _run_firecrawl(),
+        _run_linkedin_exp(),
+        _run_social_discovery(),
+        return_exceptions=True,
+    )
+
+    for batch in (firecrawl_results, linkedin_exp_results, social_results):
+        if isinstance(batch, (Exception, type(None))):
+            if isinstance(batch, Exception):
+                logger.warning(f"Deep-enrichment task failed: {batch}")
+            continue
+        for r in batch or []:
+            r_dict = r if isinstance(r, dict) else r
+            url = r_dict.get("url", "")
+            st = r_dict.get("source_type", "firecrawl")
+            canon_url = url.split("?")[0].rstrip("/")
+            dk = (canon_url, st)
+            if url and dk not in seen_keys:
+                seen_keys.add(dk)
+                seen_urls.add(canon_url)
+                all_results.append(r_dict)
 
     logger.info(f"Total search results: {len(all_results)}")
     return {"search_results": all_results, "status": "searches_complete"}

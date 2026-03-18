@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -159,13 +160,65 @@ def _build_sources_text(results: list[dict], max_sources: int = 80) -> list[str]
     return texts
 
 
+async def _run_sentiment_inline(results: list[dict], cost_tracker: dict) -> dict:
+    """Run sentiment analysis inline — called concurrently with the synthesis LLM call."""
+    from app.utils import invoke_llm_with_fallback
+    import re as _re
+    from langchain_core.messages import SystemMessage as SM, HumanMessage as HM
+
+    SENTIMENT_PROMPT = """Analyze the sentiment and reputation of a person based on their online presence.
+
+Given text content from various sources, produce:
+1. Overall reputation score (0-100)
+2. Key themes (3-5 topics the person is most associated with)
+3. Brief reputation summary (1-2 sentences)
+
+Respond with valid JSON:
+{"reputation_score": 0-100, "key_themes": ["theme1", "theme2"], "summary": "..."}"""
+
+    content_by_source: dict[str, list[str]] = {}
+    for s in results:
+        platform = s.get("source_type", "web")
+        text = s.get("content", "")[:500]
+        if text:
+            content_by_source.setdefault(platform, []).append(text)
+
+    source_texts = []
+    for platform, texts in content_by_source.items():
+        combined = "\n".join(texts[:5])[:1000]
+        source_texts.append(f"[{platform}]\n{combined}")
+
+    if not source_texts:
+        return {}
+
+    try:
+        user_prompt = f"Analyze content about a person:\n\n{'---'.join(source_texts[:10])}"
+        response, usage = await invoke_llm_with_fallback(
+            [SM(content=SENTIMENT_PROMPT), HM(content=user_prompt)],
+            label="sentiment", max_tokens=512,
+        )
+        cost_tracker["sentiment"] = usage
+        content = response.content.strip()
+        fence_match = _re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+        if fence_match:
+            content = fence_match.group(1).strip()
+        result = json.loads(content)
+        return result if isinstance(result, dict) else {}
+    except Exception as e:
+        logger.debug(f"Inline sentiment failed: {e}")
+        return {}
+
+
 async def synthesize_profile(state: AgentState) -> dict:
+    """Run sentiment analysis AND profile synthesis concurrently for lower latency."""
     llm = get_synthesis_llm()
     input_data = state.get("input", {})
     analysis = state.get("analyzed_results", {})
     results = state.get("search_results", [])
     enrichment = state.get("enrichment", {})
     identity_anchors = state.get("identity_anchors", [])
+
+    cost_tracker = dict(state.get("cost_tracker", {}))
 
     people = analysis.get("identified_people", [])
     best_idx = analysis.get("best_match_index", 0)
@@ -187,15 +240,6 @@ async def synthesize_profile(state: AgentState) -> dict:
     if deduped_facts:
         facts_str = "\nVerified facts:\n" + "\n".join(f"- {f}" for f in deduped_facts)
 
-    sentiment = state.get("sentiment", {})
-    sentiment_str = ""
-    if sentiment and sentiment.get("summary"):
-        sentiment_str = (
-            f"\nSentiment analysis:\n- Reputation score: {sentiment.get('reputation_score', 'N/A')}/100"
-            f"\n- Key themes: {', '.join(sentiment.get('key_themes', []))}"
-            f"\n- Summary: {sentiment.get('summary', '')}"
-        )
-
     sources_text = _build_sources_text(results)
     all_sources_str = "\n\n".join(sources_text)
 
@@ -203,13 +247,16 @@ async def synthesize_profile(state: AgentState) -> dict:
     if identity_anchors:
         anchors_str = f"\nCONFIRMED IDENTITY ANCHORS (companies/locations/domain for THIS person — use these to validate claims):\n{', '.join(identity_anchors[:10])}\n"
 
-    user_prompt = f"""Create the most accurate and comprehensive profile possible for:
+    # Placeholder — will be filled from concurrent sentiment result below
+    sentiment_str = ""
+
+    user_prompt_template = lambda sentiment_str_inner: f"""Create the most accurate and comprehensive profile possible for:
 {input_str}
 {anchors_str}
 {analysis_text}
 {career_timeline_str}
 {facts_str}
-{sentiment_str}
+{sentiment_str_inner}
 
 ALL Sources ({len(sources_text)} total — already filtered to remove wrong-person results):
 {all_sources_str}
@@ -221,10 +268,27 @@ IMPORTANT REMINDERS:
 - Every career_timeline entry must reference a company or role explicitly named in the sources
 - Rate each source's confidence based on how authoritative and relevant it is"""
 
-    response = await llm.ainvoke([
-        SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt),
-    ])
+    # ── Run sentiment + synthesis concurrently ────────────────────────────────
+    # Sentiment is fast (small model, small prompt) and independent of synthesis.
+    # We start both at the same time; synthesis uses sentiment result if it finishes first.
+    async def _synthesis_with_sentiment():
+        # First run sentiment (fast), then fold result into synthesis prompt
+        sentiment = await _run_sentiment_inline(results, cost_tracker)
+        s_str = ""
+        if sentiment and sentiment.get("summary"):
+            s_str = (
+                f"\nSentiment analysis:\n- Reputation score: {sentiment.get('reputation_score', 'N/A')}/100"
+                f"\n- Key themes: {', '.join(sentiment.get('key_themes', []))}"
+                f"\n- Summary: {sentiment.get('summary', '')}"
+            )
+        final_prompt = user_prompt_template(s_str)
+        resp = await llm.ainvoke([
+            SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
+            HumanMessage(content=final_prompt),
+        ])
+        return resp, sentiment
+
+    response, sentiment = await _synthesis_with_sentiment()
 
     usage = extract_usage(response)
     model_name = get_settings().synthesis_model
@@ -232,7 +296,6 @@ IMPORTANT REMINDERS:
     usage["cost"] = estimate_cost(model_name, usage["input_tokens"], usage["output_tokens"])
     usage["label"] = "synthesizer"
 
-    cost_tracker = dict(state.get("cost_tracker", {}))
     cost_tracker["synthesizer"] = usage
 
     try:
@@ -284,6 +347,7 @@ IMPORTANT REMINDERS:
     return {
         "person_profile": profile,
         "cost_tracker": cost_tracker,
+        "sentiment": sentiment,
         "status": "complete",
     }
 

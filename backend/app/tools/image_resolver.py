@@ -70,7 +70,7 @@ def _get_store_fn():
 
 
 logger = logging.getLogger(__name__)
-_CACHE_TOOL = "image_resolver_v8"  # bumped: scan top-10 web pages for portraits
+_CACHE_TOOL = "image_resolver_v9"  # bumped: name-match identity gate on all tiers
 
 # LinkedIn's CDN prefix for profile display photos
 _LICDN_PREFIX = "https://media.licdn.com/dms/image"
@@ -104,6 +104,37 @@ def _is_linkedin_profile_photo(url: str) -> bool:
     # Must NOT be a post/feed/background image
     has_reject = any(p in url for p in _LICDN_REJECT_PATHS)
     return has_profile and not has_reject
+
+
+def _names_match(target_name: str, candidate_name: str, threshold: float = 0.5) -> bool:
+    """
+    Return True if candidate_name plausibly refers to the same person as target_name.
+
+    Strategy (no external lib required):
+      - Normalise both to lower-case, split on spaces
+      - Check that at least ⌈threshold × len(target_parts)⌉ tokens from the target
+        appear in the candidate string (first name + last name coverage)
+      - A single-token target always requires an exact token match
+      - Empty candidate → False (can't verify)
+
+    Examples:
+      _names_match("Prashant Parashar", "Prashant Parashar") → True
+      _names_match("Prashant Parashar", "prashant parashar - VP at Delhivery") → True
+      _names_match("Prashant Parashar", "Sam Altman") → False
+      _names_match("Vidyadhar Sharma", "vidyadhar sharma") → True
+    """
+    if not candidate_name or not target_name:
+        return not candidate_name  # empty candidate can't be verified
+
+    target_parts = [p for p in target_name.lower().split() if len(p) > 1]
+    candidate_lower = candidate_name.lower()
+
+    if not target_parts:
+        return False
+
+    matched = sum(1 for p in target_parts if p in candidate_lower)
+    required = max(1, round(threshold * len(target_parts)))
+    return matched >= required
 
 
 # ---------------------------------------------------------------------------
@@ -862,6 +893,23 @@ async def _apify_linkedin_pic(
                 items = dr.json() if dr.status_code == 200 else []
                 if items:
                     profile = items[0] if isinstance(items, list) else {}
+
+                    # ── Identity gate: verify the scraped profile is the right person ──
+                    # Apify returns the profile at the URL we gave it, but the URL could
+                    # be wrong (e.g. someone else's LinkedIn sharing the same name slug).
+                    # Check that the full name on the profile matches our target.
+                    scraped_name = (
+                        profile.get("name")
+                        or profile.get("fullName")
+                        or profile.get("firstName", "") + " " + profile.get("lastName", "")
+                    ).strip()
+                    if scraped_name and not _names_match(name, scraped_name):
+                        logger.warning(
+                            f"[image] T2-apify identity mismatch: wanted {name!r}, "
+                            f"got {scraped_name!r} — rejecting photo"
+                        )
+                        break
+
                     pic = (
                         profile.get("profilePicUrl")
                         or profile.get("profilePicUrlEncoded")
@@ -907,11 +955,9 @@ async def _apify_find_linkedin_url(
                     for item in (items if isinstance(items, list) else []):
                         url = item.get("profileUrl") or item.get("linkedinUrl") or ""
                         if "linkedin.com/in/" in url:
-                            # Require ALL name parts to match — first-name-only is too
-                            # permissive ("John" matches "Johnson Williams")
-                            name_parts = [p for p in name.lower().split() if len(p) > 1]
-                            item_name = (item.get("name") or item.get("fullName") or "").lower()
-                            if name_parts and all(p in item_name for p in name_parts):
+                            item_name = (item.get("name") or item.get("fullName") or "").strip()
+                            # Use _names_match for consistent identity checking
+                            if _names_match(name, item_name, threshold=0.6):
                                 return url
                     break
     except Exception as e:
@@ -934,7 +980,19 @@ async def _wikipedia_image(name: str) -> str | None:
             timeout=8,
         )
         if resp.status_code == 200:
-            thumbnail = resp.json().get("thumbnail", {})
+            data = resp.json()
+            # Identity gate: confirm Wikipedia page is about our target person.
+            # The "title" or "description" should contain the person's name.
+            page_title = data.get("title", "")
+            description = data.get("description", "")
+            combined = f"{page_title} {description}".lower()
+            if not _names_match(name, combined, threshold=0.5):
+                logger.debug(
+                    f"[image] Wikipedia page title mismatch for {name!r}: "
+                    f"title={page_title!r}, desc={description!r}"
+                )
+                return None
+            thumbnail = data.get("thumbnail", {})
             img = thumbnail.get("source", "")
             if img:
                 # Request 400px — Wikipedia rate-limits requests for larger sizes
@@ -1024,8 +1082,6 @@ async def _gimg_query(
     try:
         data = await google_images(query, num=10)
 
-        name_parts = [p.lower() for p in target_name.split()] if target_name else []
-
         linkedin_profile_hit = None
         fallback_hit = None
 
@@ -1046,10 +1102,11 @@ async def _gimg_query(
                     logger.debug(f"[image] rejecting LinkedIn non-profile URL: {original[:80]}")
                     continue
 
-            # Non-LinkedIn: require name match in title to avoid wrong person
-            if name_parts:
+            # Non-LinkedIn: require name match in title/source to avoid wrong person.
+            # Use _names_match for consistent identity checking (requires ≥50% of name tokens).
+            if target_name:
                 img_title = (img.get("title") or img.get("source") or "").lower()
-                if not any(p in img_title for p in name_parts):
+                if not _names_match(target_name, img_title):
                     logger.debug(f"[image] skipping — title doesn't match target: {img_title[:60]}")
                     continue
 
